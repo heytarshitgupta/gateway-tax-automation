@@ -34,6 +34,52 @@ const { items: categories } = useList('/categories', fail)
 const { items: staff } = useList('/staff', fail)
 const { items: groups, loading: groupsLoading, load: loadGroups } = useList('/groups', fail)
 
+// Load matters using existing useList composable with non-blocking error handling
+const taskWarning = ref('')
+const onTaskError = () => {
+  taskWarning.value = 'Notice: Matter data could not be loaded. Matter-based search is temporarily unavailable.'
+}
+const { items: tasks, loading: tasksLoading, load: loadTasks } = useList('/tasks', onTaskError)
+
+// Client-to-matters reactive lookup
+const clientMattersMap = computed(() => {
+  const map = new Map()
+  for (const task of tasks.value || []) {
+    const clientId = Number(task.client_id)
+    if (!Number.isFinite(clientId)) continue
+    if (!map.has(clientId)) {
+      map.set(clientId, [])
+    }
+    map.get(clientId).push(task)
+  }
+  return map
+})
+
+// Matching matter badge helper
+const matchingMatterBadge = (clientId) => {
+  const q = search.value.trim().toLowerCase()
+  if (!q) return null
+
+  const clientTasks = clientMattersMap.value.get(Number(clientId)) || []
+  const matches = []
+
+  for (const t of clientTasks) {
+    const title = String(t.matter || '').toLowerCase()
+    const remarks = String(t.remarks || '').toLowerCase()
+    if (title.includes(q) || remarks.includes(q)) {
+      if (t.matter && !matches.includes(t.matter)) {
+        matches.push(t.matter)
+      }
+    }
+  }
+
+  if (!matches.length) return null
+  if (matches.length === 1) {
+    return matches[0]
+  }
+  return `${matches[0]} (+${matches.length - 1} more)`
+}
+
 const groupMap = computed(() => {
   const map = new Map()
   for (const g of groups.value || []) {
@@ -62,7 +108,20 @@ const visible = computed(() => {
     if (cat && c.category_id !== cat && !(c.categories || []).some((x) => x.id === cat)) return false
     if (gf === 'ungrouped' && c.group_id != null) return false
     if (gf && gf !== 'ungrouped' && String(c.group_id) !== gf) return false
-    return !q || [c.business_name, c.alias_name, ...TEXT_FIELDS.map(([k]) => c[k])].some((v) => String(v ?? '').toLowerCase().includes(q))
+    if (!q) return true
+
+    // 1. Existing client fields match
+    const clientMatch = [c.business_name, c.alias_name, ...TEXT_FIELDS.map(([k]) => c[k])]
+      .some((v) => String(v ?? '').toLowerCase().includes(q))
+    if (clientMatch) return true
+
+    // 2. Associated matters/tasks match (matter title or remarks)
+    const clientTasks = clientMattersMap.value.get(Number(c.id)) || []
+    return clientTasks.some((task) => {
+      const title = String(task.matter || '').toLowerCase()
+      const remarks = String(task.remarks || '').toLowerCase()
+      return title.includes(q) || remarks.includes(q)
+    })
   })
 })
 const subtitle = computed(() => `${visible.value.length} of ${clients.value.length} shown`)
@@ -674,7 +733,7 @@ async function removeMember(client) {
     </PageHeader>
 
     <div class="filters">
-      <input v-model="search" type="search" placeholder="Search name, mobile, GST or PAN" aria-label="Search clients" />
+      <input v-model="search" type="search" placeholder="Search name, alias, matter, GST or PAN" aria-label="Search clients" />
       <select v-model="activeFilter" @change="load" aria-label="Status filter">
         <option value="all">All clients</option>
         <option value="active">Active only</option>
@@ -692,6 +751,7 @@ async function removeMember(client) {
     </div>
 
     <AlertMessages :error="error" :toast="toast" />
+    <p v-if="taskWarning" class="banner error" role="alert">{{ taskWarning }}</p>
 
     <div class="table-wrap">
       <table>
@@ -713,6 +773,7 @@ async function removeMember(client) {
               <strong>{{ c.business_name }}</strong>
               <span v-if="c.alias_name" class="chip alias-chip">Alias: {{ c.alias_name }}</span>
               <span v-if="getGroupName(c.group_id)" class="chip group-chip">Group: {{ getGroupName(c.group_id) }}</span>
+              <span v-if="matchingMatterBadge(c.id)" class="chip matter-chip">Matter: {{ matchingMatterBadge(c.id) }}</span>
               <div class="small">
                 <span v-if="c.gst_details">GST {{ c.gst_details }}</span>
                 <span v-if="c.pan_details"> PAN {{ c.pan_details }}</span>
@@ -1191,6 +1252,16 @@ async function removeMember(client) {
   vertical-align: middle;
   background: var(--accent-soft);
   color: var(--accent);
+  border: 1px solid var(--line);
+}
+
+.matter-chip {
+  margin-left: 0.4rem;
+  font-size: 0.78rem;
+  font-weight: 500;
+  vertical-align: middle;
+  background: var(--warn-soft);
+  color: var(--warn);
   border: 1px solid var(--line);
 }
 
