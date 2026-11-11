@@ -37,18 +37,19 @@ const visible = computed(() => {
   const cat = Number(categoryFilter.value)
   return clients.value.filter((c) => {
     if (cat && c.category_id !== cat && !(c.categories || []).some((x) => x.id === cat)) return false
-    return !q || [c.business_name, ...TEXT_FIELDS.map(([k]) => c[k])].some((v) => String(v ?? '').toLowerCase().includes(q))
+    return !q || [c.business_name, c.alias_name, ...TEXT_FIELDS.map(([k]) => c[k])].some((v) => String(v ?? '').toLowerCase().includes(q))
   })
 })
 const subtitle = computed(() => `${visible.value.length} of ${clients.value.length} shown`)
 
 // ---------- form ----------
 const blankForm = () => ({
-  business_name: '', contact_name: '', mobile_number: '', gst_details: '', pan_details: '', tan_details: '',
+  business_name: '', alias_name: '', contact_name: '', mobile_number: '', gst_details: '', pan_details: '', tan_details: '',
   category_id: '', assigned_staff_id: '', is_active: true, category_ids: [],
 })
 const fromClient = (c) => ({
   ...Object.fromEntries(['business_name', ...TEXT_FIELDS.map(([k]) => k)].map((k) => [k, c[k] ?? ''])),
+  alias_name: c.alias_name ?? '',
   category_id: c.category_id ?? '',
   assigned_staff_id: c.assigned_staff_id ?? '',
   is_active: !!c.is_active,
@@ -56,6 +57,7 @@ const fromClient = (c) => ({
 })
 const toBody = (f) => ({
   business_name: f.business_name.trim(),
+  alias_name: f.alias_name?.trim() || null,
   ...Object.fromEntries(TEXT_FIELDS.map(([k]) => [k, f[k].trim() || null])),
   category_id: f.category_id === '' ? null : Number(f.category_id),
   assigned_staff_id: f.assigned_staff_id === '' ? null : Number(f.assigned_staff_id),
@@ -167,6 +169,7 @@ async function remove(c) {
           <tr v-for="c in visible" :key="c.id">
             <td>
               <strong>{{ c.business_name }}</strong>
+              <span v-if="c.alias_name" class="chip alias-chip">Alias: {{ c.alias_name }}</span>
               <div class="small">
                 <span v-if="c.gst_details">GST {{ c.gst_details }}</span>
                 <span v-if="c.pan_details"> PAN {{ c.pan_details }}</span>
@@ -199,7 +202,10 @@ async function remove(c) {
     <FormDrawer v-if="showForm" :title="editingId ? 'Edit client' : 'Add client'" :error="formError"
       :saving="saving" :submit-label="editingId ? 'Save changes' : 'Add client'"
       @close="showForm = false" @submit="save">
-      <label>Business name *<input v-model="form.business_name" required /></label>
+      <div class="two">
+        <label>Business name *<input v-model="form.business_name" required maxlength="150" /></label>
+        <label>Alias name (optional)<input v-model="form.alias_name" maxlength="150" placeholder="e.g. Gupta Traders" /></label>
+      </div>
       <div class="two">
         <label v-for="[key, label] in TEXT_FIELDS" :key="key">{{ label }}<input v-model="form[key]" /></label>
       </div>
@@ -227,3 +233,15 @@ async function remove(c) {
     </FormDrawer>
   </section>
 </template>
+
+<style scoped>
+.alias-chip {
+  margin-left: 0.4rem;
+  font-size: 0.78rem;
+  font-weight: 500;
+  vertical-align: middle;
+  background: var(--sunken);
+  color: var(--muted);
+  border: 1px solid var(--line);
+}
+</style>
