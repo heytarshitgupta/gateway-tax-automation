@@ -80,6 +80,19 @@ async function switchStaffContext(staffId) {
   return res.data
 }
 
+async function updateProfile(payload) {
+  const res = await api.patch('/auth/profile', payload)
+  authenticatedUser.value = res.data
+  selectedStaff.value = res.data.selected_staff || res.data
+  // Update local staffList if present so dropdown and tables reflect any name change
+  const updatedId = res.data.id
+  const idx = staffList.value.findIndex((s) => s.id === updatedId)
+  if (idx !== -1) {
+    staffList.value[idx] = { ...staffList.value[idx], name: res.data.name, mobile_number: res.data.mobile_number }
+  }
+  return res.data
+}
+
 async function loadStaff() {
   if (!authenticatedUser.value) return
   loading.value = true
@@ -117,6 +130,7 @@ export function useCurrentStaff() {
     login,
     logout,
     switchStaffContext,
+    updateProfile,
     loadStaff,
   }
 }

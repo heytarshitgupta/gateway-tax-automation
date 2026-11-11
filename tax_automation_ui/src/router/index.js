@@ -23,6 +23,7 @@ const routes = [
         component: () => import('../views/StaffView.vue'),
         meta: { requiresHigh: true },
       },
+      { path: 'profile', component: () => import('../views/ProfileView.vue') },
       { path: 'messages', ...page('Communication Log') },
     ],
   },

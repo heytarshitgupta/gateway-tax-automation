@@ -212,6 +212,39 @@ def select_context(data: s.SwitchContextRequest, request: Request, db: Session =
     )
 
 
+@auth_router.patch("/profile", response_model=s.AuthMeResponse)
+def update_profile(
+    data: s.ProfileUpdate,
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    # Strictly resolves the true authenticated user, ignoring any switched context
+    auth_staff = get_authenticated_staff(request, db)
+
+    changes = data.model_dump(exclude_unset=True)
+    if "name" in changes:
+        auth_staff.name = changes["name"]
+    if "mobile_number" in changes:
+        auth_staff.mobile_number = changes["mobile_number"]
+
+    db.commit()
+    db.refresh(auth_staff)
+
+    selected_staff = get_selected_staff(request, db)
+    effective_level = (
+        selected_staff.access_level
+        if auth_staff.access_level == m.AccessLevel.HIGH
+        else auth_staff.access_level
+    )
+    return s.AuthMeResponse(
+        **s.StaffOut.model_validate(auth_staff).model_dump(),
+        selected_staff_id=selected_staff.id,
+        selected_staff=s.StaffOut.model_validate(selected_staff),
+        effective_access_level=effective_level,
+        is_authenticated_high=(auth_staff.access_level == m.AccessLevel.HIGH)
+    )
+
+
 @auth_router.post("/logout")
 def logout(request: Request, response: Response):
     session_id = request.cookies.get(SESSION_COOKIE_NAME)

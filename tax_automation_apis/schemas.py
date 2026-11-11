@@ -3,7 +3,7 @@
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional, List
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 from models import MessageStatus, TaskStatus, AccessLevel
 
 
@@ -61,6 +61,35 @@ class StaffOut(StaffBase, ORM):
 
 class SwitchContextRequest(BaseModel):
     staff_id: int
+
+
+class ProfileUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: Optional[str] = None
+    mobile_number: Optional[str] = None
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            v = v.strip()
+            if not v:
+                raise ValueError("Name cannot be blank or whitespace-only")
+            if len(v) > 100:
+                raise ValueError("Name must be 100 characters or fewer")
+        return v
+
+    @field_validator("mobile_number")
+    @classmethod
+    def validate_mobile(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            v = v.strip()
+            if not v:
+                return None
+            if len(v) > 20:
+                raise ValueError("Mobile number must be 20 characters or fewer")
+        return v
 
 
 class AuthMeResponse(StaffOut):

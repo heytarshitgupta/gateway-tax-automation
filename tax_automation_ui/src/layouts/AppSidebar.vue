@@ -28,6 +28,7 @@ const menu = computed(() => {
   if (isHigh.value) {
     items.push({ to: '/staff', label: 'Staff', icon: '🧑‍💼' })
   }
+  items.push({ to: '/profile', label: 'My Profile', icon: '👤' })
   items.push(
     { to: '/tasks', label: 'Matters & Tasks', icon: '📋' },
     { to: '/messages', label: 'Communication Log', icon: '💬' },
