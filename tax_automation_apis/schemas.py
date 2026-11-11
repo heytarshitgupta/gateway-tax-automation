@@ -132,9 +132,44 @@ class ClientUpdate(BaseModel):
 
 class ClientOut(ClientBase, ORM):
     id: int
+    group_id: Optional[int] = None
     categories: List[CategoryOut] = []
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+
+
+# Client Group
+class ClientGroupBase(BaseModel):
+    name: str
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        if v is not None:
+            v = v.strip()
+            if not v:
+                raise ValueError("Group name cannot be blank or whitespace-only")
+            if len(v) > 100:
+                raise ValueError("Group name must be 100 characters or fewer")
+        return v
+
+
+class ClientGroupCreate(ClientGroupBase):
+    model_config = ConfigDict(extra="forbid")
+
+
+class ClientGroupUpdate(ClientGroupBase):
+    model_config = ConfigDict(extra="forbid")
+
+
+class ClientGroupOut(ClientGroupBase, ORM):
+    id: int
+    client_count: int = 0
+
+
+class ClientGroupDetailOut(ClientGroupBase, ORM):
+    id: int
+    clients: List[ClientOut] = []
 
 
 # Compliance date

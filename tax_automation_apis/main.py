@@ -29,7 +29,7 @@ app.add_middleware(
 app.include_router(auth_router)
 
 for r in (routers.categories, routers.staff, routers.clients, routers.compliance,
-          routers.invoices, routers.messages, routers.tasks):
+          routers.invoices, routers.messages, routers.tasks, routers.groups):
     app.include_router(r)
 
 

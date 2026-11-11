@@ -66,6 +66,14 @@ class Staff(Base):
     tasks = relationship("ClientTask", back_populates="staff_member")
 
 
+class ClientGroup(Base):
+    __tablename__ = "client_groups"
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(100), unique=True, nullable=False)
+
+    clients = relationship("Client", back_populates="group")
+
+
 class Client(Base):
     __tablename__ = "clients"
     id = Column(Integer, primary_key=True, index=True)
@@ -79,12 +87,14 @@ class Client(Base):
     alias_name = Column(String(150), nullable=True, index=True)
     category_id = Column(Integer, ForeignKey("categories.id", ondelete="SET NULL"), nullable=True)
     assigned_staff_id = Column(Integer, ForeignKey("staff.id", ondelete="SET NULL"), nullable=True)
+    group_id = Column(Integer, ForeignKey("client_groups.id", ondelete="SET NULL"), nullable=True)
     is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
     categories = relationship("Category", secondary=client_categories, back_populates="clients")
     category = relationship("Category")
     assigned_staff = relationship("Staff")
+    group = relationship("ClientGroup", back_populates="clients")
     invoices = relationship("Invoice", back_populates="client", cascade="all, delete-orphan")
     messages = relationship("MessageHistory", back_populates="client", cascade="all, delete-orphan")
     tasks = relationship("ClientTask", back_populates="client", cascade="all, delete-orphan")

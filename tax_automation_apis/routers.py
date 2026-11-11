@@ -367,3 +367,132 @@ def client_invoices(client_id: int, request: Request, db: Session = Depends(get_
 def client_messages(client_id: int, request: Request, db: Session = Depends(get_db)):
     get_authenticated_staff(request, db)
     return db.query(m.MessageHistory).filter_by(client_id=client_id).all()
+
+
+# ---------- Client Groups ----------
+groups = APIRouter(prefix="/groups", tags=["Client Groups"])
+
+
+def require_group_management_access(request: Request, db: Session) -> m.Staff:
+    operator = get_effective_staff(request, db)
+    if operator.access_level not in (m.AccessLevel.HIGH, m.AccessLevel.MEDIUM):
+        raise HTTPException(
+            status_code=403,
+            detail="Operation requires HIGH or MEDIUM access level"
+        )
+    return operator
+
+
+@groups.get("/", response_model=List[s.ClientGroupOut])
+def list_groups(request: Request, db: Session = Depends(get_db)):
+    get_authenticated_staff(request, db)
+    rows = (
+        db.query(m.ClientGroup, func.count(m.Client.id).label("client_count"))
+        .outerjoin(m.Client, m.Client.group_id == m.ClientGroup.id)
+        .group_by(m.ClientGroup.id)
+        .order_by(m.ClientGroup.name)
+        .all()
+    )
+    result = []
+    for grp, cnt in rows:
+        result.append(s.ClientGroupOut(id=grp.id, name=grp.name, client_count=cnt))
+    return result
+
+
+@groups.get("/{group_id}", response_model=s.ClientGroupDetailOut)
+def get_group(group_id: int, request: Request, db: Session = Depends(get_db)):
+    get_authenticated_staff(request, db)
+    group = db.get(m.ClientGroup, group_id)
+    if not group:
+        raise HTTPException(404, "Group not found")
+    return group
+
+
+@groups.post("/", response_model=s.ClientGroupOut, status_code=201)
+def create_group(request: Request, data: s.ClientGroupCreate, db: Session = Depends(get_db)):
+    require_group_management_access(request, db)
+    trimmed_name = data.name.strip()
+    existing = db.query(m.ClientGroup).filter(func.lower(m.ClientGroup.name) == trimmed_name.lower()).first()
+    if existing:
+        raise HTTPException(409, "A group with this name already exists")
+
+    obj = m.ClientGroup(name=trimmed_name)
+    db.add(obj)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "A group with this name already exists")
+    db.refresh(obj)
+    return s.ClientGroupOut(id=obj.id, name=obj.name, client_count=0)
+
+
+@groups.patch("/{group_id}", response_model=s.ClientGroupOut)
+def rename_group(group_id: int, request: Request, data: s.ClientGroupUpdate, db: Session = Depends(get_db)):
+    require_group_management_access(request, db)
+    group = db.get(m.ClientGroup, group_id)
+    if not group:
+        raise HTTPException(404, "Group not found")
+
+    trimmed_name = data.name.strip()
+    existing = db.query(m.ClientGroup).filter(
+        func.lower(m.ClientGroup.name) == trimmed_name.lower(),
+        m.ClientGroup.id != group_id
+    ).first()
+    if existing:
+        raise HTTPException(409, "A group with this name already exists")
+
+    group.name = trimmed_name
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "A group with this name already exists")
+    db.refresh(group)
+    cnt = db.query(m.Client).filter(m.Client.group_id == group.id).count()
+    return s.ClientGroupOut(id=group.id, name=group.name, client_count=cnt)
+
+
+@groups.delete("/{group_id}", status_code=204)
+def delete_group(group_id: int, request: Request, db: Session = Depends(get_db)):
+    require_group_management_access(request, db)
+    group = db.get(m.ClientGroup, group_id)
+    if not group:
+        raise HTTPException(404, "Group not found")
+    db.delete(group)
+    db.commit()
+
+
+@groups.post("/{group_id}/clients/{client_id}", response_model=s.ClientOut)
+def assign_client_to_group(group_id: int, client_id: int, request: Request, db: Session = Depends(get_db)):
+    require_group_management_access(request, db)
+    group = db.get(m.ClientGroup, group_id)
+    if not group:
+        raise HTTPException(404, "Group not found")
+    client = db.get(m.Client, client_id)
+    if not client:
+        raise HTTPException(404, "Client not found")
+
+    client.group_id = group.id
+    db.commit()
+    db.refresh(client)
+    return client
+
+
+@groups.delete("/{group_id}/clients/{client_id}", response_model=s.ClientOut)
+def remove_client_from_group(group_id: int, client_id: int, request: Request, db: Session = Depends(get_db)):
+    require_group_management_access(request, db)
+    group = db.get(m.ClientGroup, group_id)
+    if not group:
+        raise HTTPException(404, "Group not found")
+    client = db.get(m.Client, client_id)
+    if not client:
+        raise HTTPException(404, "Client not found")
+
+    if client.group_id != group.id:
+        raise HTTPException(400, "Client does not belong to this group")
+
+    client.group_id = None
+    db.commit()
+    db.refresh(client)
+    return client
