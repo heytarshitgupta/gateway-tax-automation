@@ -1,0 +1,12 @@
+.env
+.env.*
+!.env.example
+*.pem
+*.sql
+!schema.sql
+venv/
+venv_local/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
