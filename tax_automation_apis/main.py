@@ -19,6 +19,7 @@ origins = [
     "http://127.0.0.1:5173",
     "http://localhost:8000",
     "http://127.0.0.1:8000",
+    "https://gateway-tax-api.onrender.com",
 ]
 
 # Support configurable production frontend origins (comma-separated or single)
@@ -28,6 +29,11 @@ if frontend_url_env:
         clean_url = url.strip().rstrip("/")
         if clean_url and clean_url not in origins:
             origins.append(clean_url)
+
+# Support Render external URL if defined
+render_url_env = os.getenv("RENDER_EXTERNAL_URL", "").strip().rstrip("/")
+if render_url_env and render_url_env not in origins:
+    origins.append(render_url_env)
 
 app.add_middleware(
     CORSMiddleware,
