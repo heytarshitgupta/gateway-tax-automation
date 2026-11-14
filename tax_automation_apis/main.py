@@ -1,4 +1,7 @@
-from fastapi import FastAPI
+import os
+from urllib.parse import urlparse
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from database import Base, engine
@@ -18,6 +21,14 @@ origins = [
     "http://127.0.0.1:8000",
 ]
 
+# Support configurable production frontend origins (comma-separated or single)
+frontend_url_env = os.getenv("FRONTEND_URL", "").strip()
+if frontend_url_env:
+    for url in frontend_url_env.split(","):
+        clean_url = url.strip().rstrip("/")
+        if clean_url and clean_url not in origins:
+            origins.append(clean_url)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -25,6 +36,31 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def csrf_origin_protection(request: Request, call_next):
+    if request.method in ("POST", "PUT", "PATCH", "DELETE"):
+        # Enforce on authenticated state-changing requests
+        session_id = request.cookies.get("session_id")
+        if session_id:
+            origin = request.headers.get("origin")
+            referer = request.headers.get("referer")
+            if origin:
+                if origin.rstrip("/") not in origins:
+                    return JSONResponse(
+                        status_code=403,
+                        content={"detail": "CSRF verification failed: untrusted origin"}
+                    )
+            elif referer:
+                ref_parsed = urlparse(referer)
+                ref_origin = f"{ref_parsed.scheme}://{ref_parsed.netloc}"
+                if ref_origin not in origins:
+                    return JSONResponse(
+                        status_code=403,
+                        content={"detail": "CSRF verification failed: untrusted referer"}
+                    )
+    return await call_next(request)
 
 app.include_router(auth_router)
 

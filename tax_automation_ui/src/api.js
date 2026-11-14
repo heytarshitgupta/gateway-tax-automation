@@ -1,9 +1,13 @@
 import axios from 'axios'
 
-const hostname = typeof window !== 'undefined' && window.location.hostname ? window.location.hostname : '127.0.0.1'
+const defaultHost = typeof window !== 'undefined' && window.location.hostname ? window.location.hostname : '127.0.0.1'
+const defaultBaseURL = `http://${defaultHost}:8000/`
+
+const configuredBaseURL = import.meta.env.VITE_API_BASE_URL
+const baseURL = (configuredBaseURL || defaultBaseURL).replace(/\/?$/, '/')
 
 const api = axios.create({
-  baseURL: `http://${hostname}:8000/`,
+  baseURL,
   withCredentials: true,
 })
 

@@ -1,4 +1,5 @@
 """Session-based authentication and authorization helpers with HIGH-only context switching and effective permissions."""
+import os
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, Optional
@@ -13,6 +14,23 @@ import schemas as s
 
 SESSION_COOKIE_NAME = "session_id"
 SESSION_LIFETIME = timedelta(hours=12)
+
+# Production cookie configuration
+COOKIE_SECURE_ENV = os.getenv("COOKIE_SECURE", "").strip().lower()
+if COOKIE_SECURE_ENV in ("true", "1", "yes"):
+    IS_SECURE_COOKIE = True
+elif COOKIE_SECURE_ENV in ("false", "0", "no"):
+    IS_SECURE_COOKIE = False
+else:
+    # Auto-detect production environment (e.g. Render sets RENDER=true)
+    IS_SECURE_COOKIE = os.getenv("ENVIRONMENT", "development").lower() == "production" or bool(os.getenv("RENDER"))
+
+COOKIE_SAMESITE_ENV = os.getenv("COOKIE_SAMESITE", "").strip().lower()
+if COOKIE_SAMESITE_ENV in ("none", "lax", "strict"):
+    SESSION_COOKIE_SAMESITE = COOKIE_SAMESITE_ENV
+else:
+    # Recommended production cookie setting with Vercel same-origin /api proxy is lax
+    SESSION_COOKIE_SAMESITE = "lax"
 
 # In-memory session store: session_id -> {"staff_id": int, "selected_staff_id": int, "expires_at": datetime}
 sessions: Dict[str, Dict[str, Any]] = {}
@@ -149,8 +167,8 @@ def login(data: s.LoginRequest, response: Response, db: Session = Depends(get_db
         key=SESSION_COOKIE_NAME,
         value=session_id,
         httponly=True,
-        samesite="lax",
-        secure=False,
+        samesite=SESSION_COOKIE_SAMESITE,
+        secure=IS_SECURE_COOKIE,
         max_age=int(SESSION_LIFETIME.total_seconds()),
         path="/"
     )
@@ -249,5 +267,11 @@ def update_profile(
 def logout(request: Request, response: Response):
     session_id = request.cookies.get(SESSION_COOKIE_NAME)
     delete_session(session_id)
-    response.delete_cookie(key=SESSION_COOKIE_NAME, path="/")
+    response.delete_cookie(
+        key=SESSION_COOKIE_NAME,
+        path="/",
+        httponly=True,
+        samesite=SESSION_COOKIE_SAMESITE,
+        secure=IS_SECURE_COOKIE,
+    )
     return {"status": "ok"}
