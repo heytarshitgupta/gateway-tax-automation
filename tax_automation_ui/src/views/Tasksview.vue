@@ -24,9 +24,9 @@ const nul = (v) => (v === '' || v === undefined ? null : v)
 // ---------- data ----------
 const { error, toast, flash, fail } = useNotify()
 const { activeStaffId, isHigh, isMedium, isLow } = useCurrentStaff()
-const { items: tasks, loading, load } = useList('/tasks', fail)
-const { items: clients } = useList('/clients', fail)
-const { items: staff } = useList('/staff', fail)
+const { items: tasks, loading, load } = useList('/tasks/', fail)
+const { items: clients } = useList('/clients/', fail)
+const { items: staff } = useList('/staff/', fail)
 
 const clientName = (id) => clients.value.find((c) => c.id === id)?.business_name || `Client #${id}`
 const staffName = (id) => staff.value.find((s) => s.id === id)?.name || ''
@@ -164,7 +164,7 @@ async function save() {
   }
   try {
     if (editingId.value) await api.patch(`/tasks/${editingId.value}`, body)
-    else await api.post('/tasks', body)
+    else await api.post('/tasks/', body)
     flash(editingId.value ? 'Task updated' : 'Task added')
     showForm.value = false
     await load()

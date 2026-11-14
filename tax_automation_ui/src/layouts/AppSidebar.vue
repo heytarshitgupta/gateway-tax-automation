@@ -56,7 +56,7 @@ async function handleLogout() {
 onMounted(async () => {
   init()
   loadStaff()
-  online.value = await api.get('/categories').then(() => true, () => false)
+  online.value = await api.get('/categories/').then(() => true, () => false)
 })
 </script>
 

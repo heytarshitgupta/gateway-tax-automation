@@ -27,17 +27,17 @@ const clientFilter = ref('all') // all | my_assigned | active | inactive | my_as
 const categoryFilter = ref('')
 const groupFilter = ref('') // '' (All groups) | 'ungrouped' | String(group_id)
 
-const { items: clients, loading, load } = useList('/clients', fail)
-const { items: categories } = useList('/categories', fail)
-const { items: staff } = useList('/staff', fail)
-const { items: groups, loading: groupsLoading, load: loadGroups } = useList('/groups', fail)
+const { items: clients, loading, load } = useList('/clients/', fail)
+const { items: categories } = useList('/categories/', fail)
+const { items: staff } = useList('/staff/', fail)
+const { items: groups, loading: groupsLoading, load: loadGroups } = useList('/groups/', fail)
 
 // Load matters using existing useList composable with non-blocking error handling
 const taskWarning = ref('')
 const onTaskError = () => {
   taskWarning.value = 'Notice: Matter data could not be loaded. Matter-based search is temporarily unavailable.'
 }
-const { items: tasks, loading: tasksLoading, load: loadTasks } = useList('/tasks', onTaskError)
+const { items: tasks, loading: tasksLoading, load: loadTasks } = useList('/tasks/', onTaskError)
 
 // Client-to-matters reactive lookup
 const clientMattersMap = computed(() => {
@@ -308,7 +308,7 @@ async function save() {
         savedClient = res.data
         initialFormJson.value = clientPayloadStr
       } else {
-        const res = await api.post('/clients', clientPayload)
+        const res = await api.post('/clients/', clientPayload)
         savedClient = res.data
         initialFormJson.value = JSON.stringify(toBody(fromClient(savedClient)))
       }

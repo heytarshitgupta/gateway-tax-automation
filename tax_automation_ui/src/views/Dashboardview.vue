@@ -14,10 +14,10 @@ const problems = ref([])
 // const miss = (name) => () => problems.value.push(`Could not load ${name}.`)
 const miss = (name) => (e) => problems.value.push(`Could not load ${name}: ${errMessage(e)}`)
 const lists = [
-  useList('/clients', miss('clients')),
-  useList('/messages', miss('messages')),
-  useList('/compliance-dates', miss('compliance dates')),
-  useList('/categories', miss('categories')),
+  useList('/clients/', miss('clients')),
+  useList('/messages/', miss('messages')),
+  useList('/compliance-dates/', miss('compliance dates')),
+  useList('/categories/', miss('categories')),
 ]
 const [clients, messages, dates, categories] = lists.map((l) => l.items)
 const loading = computed(() => lists.some((l) => l.loading.value))

@@ -11,13 +11,37 @@ const api = axios.create({
   withCredentials: true,
 })
 
+// Collection endpoints requiring trailing slash to prevent FastAPI 307 redirects
+const COLLECTION_ROUTES = new Set([
+  '/clients',
+  '/categories',
+  '/tasks',
+  '/groups',
+  '/staff',
+  '/messages',
+  '/invoices',
+  '/compliance-dates',
+])
+
+api.interceptors.request.use((config) => {
+  if (config.url && COLLECTION_ROUTES.has(config.url)) {
+    config.url = config.url + '/'
+  }
+  return config
+})
+
+let isRedirectingToLogin = false
+
 api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
       if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
-        localStorage.removeItem('active_staff_id')
-        window.location.href = '/login'
+        if (!isRedirectingToLogin) {
+          isRedirectingToLogin = true
+          localStorage.removeItem('active_staff_id')
+          window.location.href = '/login'
+        }
       }
     }
     return Promise.reject(error)

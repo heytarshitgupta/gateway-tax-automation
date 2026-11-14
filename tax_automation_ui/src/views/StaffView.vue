@@ -30,7 +30,7 @@ const search = ref('')
 const activeFilter = ref('all') // all | active | inactive
 const roleFilter = ref('')
 
-const { items: staff, loading, load } = useList('/staff', fail, () =>
+const { items: staff, loading, load } = useList('/staff/', fail, () =>
   activeFilter.value === 'all' ? {} : { is_active: activeFilter.value === 'active' }
 )
 
@@ -113,7 +113,7 @@ async function save() {
   formError.value = ''
   try {
     if (editingId.value) await api.patch(`/staff/${editingId.value}`, toBody(form, false))
-    else await api.post('/staff', toBody(form, true))
+    else await api.post('/staff/', toBody(form, true))
     flash(editingId.value ? 'Staff member updated' : 'Staff member added')
     showForm.value = false
     Object.assign(form, blankForm())
