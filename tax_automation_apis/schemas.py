@@ -130,6 +130,9 @@ class ClientUpdate(BaseModel):
     is_active: Optional[bool] = None
     category_ids: Optional[List[int]] = None
 
+class ClientReassignRequest(BaseModel):
+    assigned_staff_id: Optional[int] = None
+
 class ClientOut(ClientBase, ORM):
     id: int
     group_id: Optional[int] = None

@@ -17,19 +17,17 @@ const TEXT_FIELDS = [
 
 // ---------- data & permissions ----------
 const { error, toast, flash, fail } = useNotify()
-const { isHigh, isMedium } = useCurrentStaff()
+const { isHigh, isMedium, authenticatedUser } = useCurrentStaff()
 const canAddClient = computed(() => isHigh.value || isMedium.value)
 const canManageGroups = computed(() => isHigh.value || isMedium.value)
 const canViewClientActions = computed(() => isHigh.value || isMedium.value)
 
 const search = ref('')
-const activeFilter = ref('all') // all | active | inactive
+const clientFilter = ref('all') // all | my_assigned | active | inactive | my_assigned_active | my_assigned_inactive
 const categoryFilter = ref('')
 const groupFilter = ref('') // '' (All groups) | 'ungrouped' | String(group_id)
 
-const { items: clients, loading, load } = useList('/clients', fail, () =>
-  activeFilter.value === 'all' ? {} : { is_active: activeFilter.value === 'active' }
-)
+const { items: clients, loading, load } = useList('/clients', fail)
 const { items: categories } = useList('/categories', fail)
 const { items: staff } = useList('/staff', fail)
 const { items: groups, loading: groupsLoading, load: loadGroups } = useList('/groups', fail)
@@ -98,13 +96,44 @@ watch(groups, (newGroups) => {
   }
 })
 
+// Reset filter if HIGH-specific option is active and user is no longer HIGH
+watch(isHigh, (high) => {
+  if (!high && ['my_assigned', 'my_assigned_active', 'my_assigned_inactive'].includes(clientFilter.value)) {
+    clientFilter.value = 'all'
+  }
+})
+
 const staffName = (id) => staff.value.find((s) => s.id === id)?.name || '—'
 
 const visible = computed(() => {
   const q = search.value.trim().toLowerCase()
   const cat = Number(categoryFilter.value)
   const gf = groupFilter.value
+  const myId = authenticatedUser.value?.id
+
   return clients.value.filter((c) => {
+    if (isHigh.value) {
+      if (clientFilter.value === 'my_assigned') {
+        if (myId != null && c.assigned_staff_id !== myId) return false
+      } else if (clientFilter.value === 'active') {
+        if (!c.is_active) return false
+      } else if (clientFilter.value === 'inactive') {
+        if (c.is_active) return false
+      } else if (clientFilter.value === 'my_assigned_active') {
+        if (myId != null && c.assigned_staff_id !== myId) return false
+        if (!c.is_active) return false
+      } else if (clientFilter.value === 'my_assigned_inactive') {
+        if (myId != null && c.assigned_staff_id !== myId) return false
+        if (c.is_active) return false
+      }
+    } else {
+      if (clientFilter.value === 'active') {
+        if (!c.is_active) return false
+      } else if (clientFilter.value === 'inactive') {
+        if (c.is_active) return false
+      }
+    }
+
     if (cat && c.category_id !== cat && !(c.categories || []).some((x) => x.id === cat)) return false
     if (gf === 'ungrouped' && c.group_id != null) return false
     if (gf && gf !== 'ungrouped' && String(c.group_id) !== gf) return false
@@ -550,13 +579,61 @@ const addClientMovingWarning = computed(() => {
   return ''
 })
 
+// ---------- MEDIUM/HIGH client reassignment modal/drawer ----------
+const showReassignDrawer = ref(false)
+const clientForReassign = ref(null)
+const reassignTargetStaffId = ref('')
+const reassignSaving = ref(false)
+const reassignError = ref('')
+
+function openReassignDrawer(client) {
+  if (!isMedium.value && !isHigh.value) return
+  clientForReassign.value = client
+  reassignTargetStaffId.value = client.assigned_staff_id ? String(client.assigned_staff_id) : ''
+  reassignError.value = ''
+  showReassignDrawer.value = true
+}
+
+function closeReassignDrawer() {
+  showReassignDrawer.value = false
+  clientForReassign.value = null
+  reassignTargetStaffId.value = ''
+  reassignError.value = ''
+}
+
+async function handleReassign() {
+  if (!clientForReassign.value) return
+  if (!reassignTargetStaffId.value) {
+    reassignError.value = 'Please select a staff member to assign this client to.'
+    return
+  }
+  reassignSaving.value = true
+  reassignError.value = ''
+  try {
+    const res = await api.patch(`/clients/${clientForReassign.value.id}/reassign`, {
+      assigned_staff_id: Number(reassignTargetStaffId.value),
+    })
+    const targetName = staffName(res.data.assigned_staff_id)
+    flash(`Client "${clientForReassign.value.business_name}" reassigned to ${targetName}.`)
+    closeReassignDrawer()
+    await load()
+  } catch (e) {
+    reassignError.value = errMessage(e)
+  } finally {
+    reassignSaving.value = false
+  }
+}
+
 // Reactive security watcher: close unauthorized drawers if permissions change during context switch
-watch([isHigh, canManageGroups], ([high, canManage]) => {
-  if (!high && showForm.value) {
+watch([isHigh, isMedium, canManageGroups], ([high, med, canManage]) => {
+  if (!high && showForm.value && !med) {
     showForm.value = false
   }
   if (!canManage && showManageGroupDrawer.value) {
     showManageGroupDrawer.value = false
+  }
+  if (!med && !high && showReassignDrawer.value) {
+    showReassignDrawer.value = false
   }
 })
 
@@ -734,10 +811,13 @@ async function removeMember(client) {
 
     <div class="filters">
       <input v-model="search" type="search" placeholder="Search name, alias, matter, GST or PAN" aria-label="Search clients" />
-      <select v-model="activeFilter" @change="load" aria-label="Status filter">
+      <select v-model="clientFilter" aria-label="Client filter">
         <option value="all">All clients</option>
+        <option v-if="isHigh" value="my_assigned">My assigned clients</option>
         <option value="active">Active only</option>
         <option value="inactive">Inactive only</option>
+        <option v-if="isHigh" value="my_assigned_active">My assigned — Active</option>
+        <option v-if="isHigh" value="my_assigned_inactive">My assigned — Inactive</option>
       </select>
       <select v-model="categoryFilter" aria-label="Category filter">
         <option value="">All categories</option>
@@ -798,6 +878,7 @@ async function removeMember(client) {
               <button v-if="isHigh" class="btn" @click="openForm(c)">Edit</button>
               <button v-if="isHigh" class="btn danger" @click="remove(c)">Delete</button>
               <button v-if="isMedium" class="btn" @click="openManageGroupDrawer(c)">Manage Group</button>
+              <button v-if="isMedium" class="btn" @click="openReassignDrawer(c)">Reassign</button>
             </td>
           </tr>
         </tbody>
@@ -822,12 +903,19 @@ async function removeMember(client) {
             <option v-for="c in categories" :key="c.id" :value="c.id">{{ c.name }}</option>
           </select>
         </label>
-        <label>Assigned staff
+        <label v-if="isHigh">Assigned staff
           <select v-model="form.assigned_staff_id">
             <option value="">Unassigned</option>
             <option v-for="s in staff" :key="s.id" :value="s.id">{{ s.name }}</option>
           </select>
         </label>
+        <div v-else-if="isMedium" class="creation-assigned-notice">
+          <label>Assigned staff</label>
+          <input type="text" :value="authenticatedUser?.name ? `${authenticatedUser.name} (You)` : 'You'" disabled />
+          <div class="small muted-text" style="margin-top: 0.25rem;">
+            New clients are initially assigned to you. You can reassign them afterward.
+          </div>
+        </div>
       </div>
       <fieldset>
         <legend>All applicable categories</legend>
@@ -1024,6 +1112,56 @@ async function removeMember(client) {
 
         <div class="actions">
           <button type="button" class="btn" @click="closeManageGroupDrawer">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Client Reassign Drawer (for MEDIUM staff) -->
+    <div v-if="showReassignDrawer" class="overlay" @click.self="closeReassignDrawer" @keydown.esc="closeReassignDrawer">
+      <div class="drawer reassign-drawer" role="dialog" aria-modal="true" :aria-label="'Reassign ' + (clientForReassign?.business_name || 'Client')">
+        <div class="drawer-header">
+          <div>
+            <h2>Reassign Client</h2>
+            <div class="small muted-text">
+              Client: <strong>{{ clientForReassign?.business_name }}</strong>
+            </div>
+          </div>
+          <button type="button" class="mini" @click="closeReassignDrawer" aria-label="Close drawer">✕</button>
+        </div>
+
+        <p v-if="reassignError" class="banner error" role="alert">{{ reassignError }}</p>
+
+        <div class="reassign-body">
+          <p class="small muted-text" style="margin-bottom: 1rem;">
+            Reassigning this client to another staff member transfers primary responsibility.
+            <span v-if="isMedium">Once reassigned away, this client will no longer appear in your assigned clients list.</span>
+          </p>
+
+          <label>
+            Assign To *
+            <select v-model="reassignTargetStaffId" :disabled="reassignSaving">
+              <option value="" disabled>Select staff member...</option>
+              <option
+                v-for="s in staff.filter((st) => st.is_active)"
+                :key="s.id"
+                :value="String(s.id)"
+              >
+                {{ s.name }} ({{ s.role }} - {{ s.access_level }})
+              </option>
+            </select>
+          </label>
+
+          <div style="margin-top: 1.5rem; display: flex; gap: 0.5rem; justify-content: flex-end;">
+            <button type="button" class="btn" :disabled="reassignSaving" @click="closeReassignDrawer">Cancel</button>
+            <button
+              type="button"
+              class="btn primary"
+              :disabled="reassignSaving || !reassignTargetStaffId"
+              @click="handleReassign"
+            >
+              {{ reassignSaving ? 'Reassigning…' : 'Confirm Reassignment' }}
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -1637,5 +1775,28 @@ async function removeMember(client) {
   display: flex;
   align-items: center;
   gap: 0.4rem;
+}
+
+/* MEDIUM User Reassign Drawer & Creation Notice */
+.reassign-drawer {
+  width: min(440px, 100%);
+}
+
+.reassign-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.creation-assigned-notice {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.creation-assigned-notice input:disabled {
+  background: var(--sunken);
+  color: var(--muted);
+  cursor: not-allowed;
 }
 </style>

@@ -1,7 +1,7 @@
 """CRUD routers. A small factory covers the simple tables; clients are custom (M2M categories)."""
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import func
+from sqlalchemy import func, and_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -16,8 +16,10 @@ def crud_router(prefix, tag, Model, Create, Update, Out, filters=()):
 
     @r.get("/", response_model=List[Out])
     def list_items(request: Request, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-        get_authenticated_staff(request, db)
+        auth_staff = get_authenticated_staff(request, db)
         q = db.query(Model)
+        if hasattr(Model, "client_id") and auth_staff.access_level != m.AccessLevel.HIGH:
+            q = q.join(m.Client, Model.client_id == m.Client.id).filter(m.Client.assigned_staff_id == auth_staff.id)
         for f in filters:  # e.g. ?client_id=1&status=PENDING
             if f in request.query_params:
                 q = q.filter(getattr(Model, f) == request.query_params[f])
@@ -25,15 +27,24 @@ def crud_router(prefix, tag, Model, Create, Update, Out, filters=()):
 
     @r.get("/{item_id}", response_model=Out)
     def get_item(item_id: int, request: Request, db: Session = Depends(get_db)):
-        get_authenticated_staff(request, db)
+        auth_staff = get_authenticated_staff(request, db)
         obj = db.get(Model, item_id)
         if not obj:
             raise HTTPException(404, f"{tag} not found")
+        if hasattr(obj, "client_id") and auth_staff.access_level != m.AccessLevel.HIGH:
+            client = db.get(m.Client, obj.client_id)
+            if not client or client.assigned_staff_id != auth_staff.id:
+                raise HTTPException(404, f"{tag} not found")
         return obj
 
     @r.post("/", response_model=Out, status_code=201)
     def create_item(request: Request, data: Create, db: Session = Depends(get_db)):
-        get_authenticated_staff(request, db)
+        auth_staff = get_authenticated_staff(request, db)
+        if hasattr(Model, "client_id") and auth_staff.access_level != m.AccessLevel.HIGH:
+            client_id = getattr(data, "client_id", None)
+            client = db.get(m.Client, client_id) if client_id else None
+            if not client or client.assigned_staff_id != auth_staff.id:
+                raise HTTPException(404, "Client not found")
         obj = Model(**data.model_dump())
         db.add(obj)
         try:
@@ -46,10 +57,14 @@ def crud_router(prefix, tag, Model, Create, Update, Out, filters=()):
 
     @r.patch("/{item_id}", response_model=Out)
     def update_item(item_id: int, request: Request, data: Update, db: Session = Depends(get_db)):
-        get_authenticated_staff(request, db)
+        auth_staff = get_authenticated_staff(request, db)
         obj = db.get(Model, item_id)
         if not obj:
             raise HTTPException(404, f"{tag} not found")
+        if hasattr(obj, "client_id") and auth_staff.access_level != m.AccessLevel.HIGH:
+            client = db.get(m.Client, obj.client_id)
+            if not client or client.assigned_staff_id != auth_staff.id:
+                raise HTTPException(404, f"{tag} not found")
         for k, v in data.model_dump(exclude_unset=True).items():
             setattr(obj, k, v)
         try:
@@ -62,10 +77,14 @@ def crud_router(prefix, tag, Model, Create, Update, Out, filters=()):
 
     @r.delete("/{item_id}", status_code=204)
     def delete_item(item_id: int, request: Request, db: Session = Depends(get_db)):
-        get_authenticated_staff(request, db)
+        auth_staff = get_authenticated_staff(request, db)
         obj = db.get(Model, item_id)
         if not obj:
             raise HTTPException(404, f"{tag} not found")
+        if hasattr(obj, "client_id") and auth_staff.access_level != m.AccessLevel.HIGH:
+            client = db.get(m.Client, obj.client_id)
+            if not client or client.assigned_staff_id != auth_staff.id:
+                raise HTTPException(404, f"{tag} not found")
         db.delete(obj)
         db.commit()
 
@@ -198,8 +217,20 @@ tasks = APIRouter(prefix="/tasks", tags=["Task"])
 
 @tasks.get("/", response_model=List[s.TaskOut])
 def list_tasks(request: Request, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    get_authenticated_staff(request, db)
+    auth_staff = get_authenticated_staff(request, db)
     q = db.query(m.ClientTask)
+    if auth_staff.access_level != m.AccessLevel.HIGH:
+        q = q.join(m.ClientTask.client).filter(m.Client.assigned_staff_id == auth_staff.id)
+    else:
+        if "assigned_staff_id" in request.query_params:
+            val = request.query_params["assigned_staff_id"]
+            if val in ("unassigned", "null", ""):
+                q = q.join(m.ClientTask.client).filter(m.Client.assigned_staff_id.is_(None))
+            else:
+                try:
+                    q = q.join(m.ClientTask.client).filter(m.Client.assigned_staff_id == int(val))
+                except ValueError:
+                    pass
     for f in ("client_id", "staff_id", "status"):
         if f in request.query_params:
             q = q.filter(getattr(m.ClientTask, f) == request.query_params[f])
@@ -208,10 +239,14 @@ def list_tasks(request: Request, skip: int = 0, limit: int = 100, db: Session = 
 
 @tasks.get("/{item_id}", response_model=s.TaskOut)
 def get_task(item_id: int, request: Request, db: Session = Depends(get_db)):
-    get_authenticated_staff(request, db)
+    auth_staff = get_authenticated_staff(request, db)
     obj = db.get(m.ClientTask, item_id)
     if not obj:
         raise HTTPException(404, "Task not found")
+    if auth_staff.access_level != m.AccessLevel.HIGH:
+        client = obj.client
+        if not client or client.assigned_staff_id != auth_staff.id:
+            raise HTTPException(404, "Task not found")
     return obj
 
 
@@ -239,6 +274,9 @@ def update_task(item_id: int, request: Request, data: s.TaskUpdate, db: Session 
     changes = data.model_dump(exclude_unset=True)
 
     if operator.access_level != m.AccessLevel.HIGH:
+        client = obj.client
+        if not client or client.assigned_staff_id != operator.id:
+            raise HTTPException(404, "Task not found")
         # MEDIUM and LOW access rules:
         if obj.staff_id is None:
             raise HTTPException(403, "Unassigned matters can only be modified by HIGH staff")
@@ -285,9 +323,21 @@ def _load_categories(db: Session, ids: List[int]):
 
 @clients.get("/", response_model=List[s.ClientOut])
 def list_clients(request: Request, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    get_authenticated_staff(request, db)
+    auth_staff = get_authenticated_staff(request, db)
     q = db.query(m.Client)
-    for f in ("is_active", "category_id", "assigned_staff_id"):
+    if auth_staff.access_level != m.AccessLevel.HIGH:
+        q = q.filter(m.Client.assigned_staff_id == auth_staff.id)
+    else:
+        if "assigned_staff_id" in request.query_params:
+            val = request.query_params["assigned_staff_id"]
+            if val in ("unassigned", "null", ""):
+                q = q.filter(m.Client.assigned_staff_id.is_(None))
+            else:
+                try:
+                    q = q.filter(m.Client.assigned_staff_id == int(val))
+                except ValueError:
+                    pass
+    for f in ("is_active", "category_id"):
         if f in request.query_params:
             q = q.filter(getattr(m.Client, f) == request.query_params[f])
     return q.order_by(m.Client.id).offset(skip).limit(limit).all()
@@ -295,19 +345,28 @@ def list_clients(request: Request, skip: int = 0, limit: int = 100, db: Session 
 
 @clients.get("/{client_id}", response_model=s.ClientOut)
 def get_client(client_id: int, request: Request, db: Session = Depends(get_db)):
-    get_authenticated_staff(request, db)
+    auth_staff = get_authenticated_staff(request, db)
     obj = db.get(m.Client, client_id)
     if not obj:
+        raise HTTPException(404, "Client not found")
+    if auth_staff.access_level != m.AccessLevel.HIGH and obj.assigned_staff_id != auth_staff.id:
         raise HTTPException(404, "Client not found")
     return obj
 
 
 @clients.post("/", response_model=s.ClientOut, status_code=201)
 def create_client(request: Request, data: s.ClientCreate, db: Session = Depends(get_db)):
-    operator = get_effective_staff(request, db)
-    if operator.access_level not in (m.AccessLevel.HIGH, m.AccessLevel.MEDIUM):
+    auth_staff = get_authenticated_staff(request, db)
+    if auth_staff.access_level not in (m.AccessLevel.HIGH, m.AccessLevel.MEDIUM):
         raise HTTPException(403, "Adding clients requires HIGH or MEDIUM access level")
     payload = data.model_dump(exclude={"category_ids"})
+    if auth_staff.access_level == m.AccessLevel.MEDIUM:
+        payload["assigned_staff_id"] = auth_staff.id
+    elif auth_staff.access_level == m.AccessLevel.HIGH:
+        if payload.get("assigned_staff_id") is not None:
+            target = db.get(m.Staff, payload["assigned_staff_id"])
+            if not target or not target.is_active:
+                raise HTTPException(400, "Assigned staff member does not exist or is inactive")
     obj = m.Client(**payload)
     obj.categories = _load_categories(db, data.category_ids)
     db.add(obj)
@@ -322,11 +381,17 @@ def create_client(request: Request, data: s.ClientCreate, db: Session = Depends(
 
 @clients.patch("/{client_id}", response_model=s.ClientOut)
 def update_client(client_id: int, request: Request, data: s.ClientUpdate, db: Session = Depends(get_db)):
-    require_high_access(request, db)
+    auth_staff = get_authenticated_staff(request, db)
+    if auth_staff.access_level != m.AccessLevel.HIGH:
+        raise HTTPException(403, "Operation requires HIGH access level")
     obj = db.get(m.Client, client_id)
     if not obj:
         raise HTTPException(404, "Client not found")
     changes = data.model_dump(exclude_unset=True)
+    if "assigned_staff_id" in changes and changes["assigned_staff_id"] is not None:
+        target = db.get(m.Staff, changes["assigned_staff_id"])
+        if not target or not target.is_active:
+            raise HTTPException(400, "Assigned staff member does not exist or is inactive")
     ids = changes.pop("category_ids", None)
     for k, v in changes.items():
         setattr(obj, k, v)
@@ -341,9 +406,48 @@ def update_client(client_id: int, request: Request, data: s.ClientUpdate, db: Se
     return obj
 
 
+@clients.patch("/{client_id}/reassign", response_model=s.ClientOut)
+def reassign_client(client_id: int, request: Request, data: s.ClientReassignRequest, db: Session = Depends(get_db)):
+    auth_staff = get_authenticated_staff(request, db)
+    if auth_staff.access_level == m.AccessLevel.LOW:
+        raise HTTPException(403, "LOW staff cannot reassign clients")
+
+    obj = db.get(m.Client, client_id)
+    if not obj:
+        raise HTTPException(404, "Client not found")
+
+    if auth_staff.access_level == m.AccessLevel.MEDIUM:
+        if obj.assigned_staff_id != auth_staff.id:
+            raise HTTPException(404, "Client not found")
+        if data.assigned_staff_id is None:
+            raise HTTPException(400, "MEDIUM staff cannot clear client assignment")
+        target = db.get(m.Staff, data.assigned_staff_id)
+        if not target or not target.is_active:
+            raise HTTPException(400, "Target staff member does not exist or is inactive")
+        obj.assigned_staff_id = target.id
+    elif auth_staff.access_level == m.AccessLevel.HIGH:
+        if data.assigned_staff_id is not None:
+            target = db.get(m.Staff, data.assigned_staff_id)
+            if not target or not target.is_active:
+                raise HTTPException(400, "Target staff member does not exist or is inactive")
+            obj.assigned_staff_id = target.id
+        else:
+            obj.assigned_staff_id = None
+
+    try:
+        db.commit()
+    except IntegrityError as e:
+        db.rollback()
+        raise HTTPException(409, f"Integrity error: {e.orig}")
+    db.refresh(obj)
+    return obj
+
+
 @clients.delete("/{client_id}", status_code=204)
 def delete_client(client_id: int, request: Request, db: Session = Depends(get_db)):
-    require_high_access(request, db)
+    auth_staff = get_authenticated_staff(request, db)
+    if auth_staff.access_level != m.AccessLevel.HIGH:
+        raise HTTPException(403, "Operation requires HIGH access level")
     obj = db.get(m.Client, client_id)
     if not obj:
         raise HTTPException(404, "Client not found")
@@ -353,19 +457,34 @@ def delete_client(client_id: int, request: Request, db: Session = Depends(get_db
 
 @clients.get("/{client_id}/tasks", response_model=List[s.TaskOut])
 def client_tasks(client_id: int, request: Request, db: Session = Depends(get_db)):
-    get_authenticated_staff(request, db)
+    auth_staff = get_authenticated_staff(request, db)
+    obj = db.get(m.Client, client_id)
+    if not obj:
+        raise HTTPException(404, "Client not found")
+    if auth_staff.access_level != m.AccessLevel.HIGH and obj.assigned_staff_id != auth_staff.id:
+        raise HTTPException(404, "Client not found")
     return db.query(m.ClientTask).filter_by(client_id=client_id).all()
 
 
 @clients.get("/{client_id}/invoices", response_model=List[s.InvoiceOut])
 def client_invoices(client_id: int, request: Request, db: Session = Depends(get_db)):
-    get_authenticated_staff(request, db)
+    auth_staff = get_authenticated_staff(request, db)
+    obj = db.get(m.Client, client_id)
+    if not obj:
+        raise HTTPException(404, "Client not found")
+    if auth_staff.access_level != m.AccessLevel.HIGH and obj.assigned_staff_id != auth_staff.id:
+        raise HTTPException(404, "Client not found")
     return db.query(m.Invoice).filter_by(client_id=client_id).all()
 
 
 @clients.get("/{client_id}/messages", response_model=List[s.MessageOut])
 def client_messages(client_id: int, request: Request, db: Session = Depends(get_db)):
-    get_authenticated_staff(request, db)
+    auth_staff = get_authenticated_staff(request, db)
+    obj = db.get(m.Client, client_id)
+    if not obj:
+        raise HTTPException(404, "Client not found")
+    if auth_staff.access_level != m.AccessLevel.HIGH and obj.assigned_staff_id != auth_staff.id:
+        raise HTTPException(404, "Client not found")
     return db.query(m.MessageHistory).filter_by(client_id=client_id).all()
 
 
@@ -374,25 +493,40 @@ groups = APIRouter(prefix="/groups", tags=["Client Groups"])
 
 
 def require_group_management_access(request: Request, db: Session) -> m.Staff:
-    operator = get_effective_staff(request, db)
-    if operator.access_level not in (m.AccessLevel.HIGH, m.AccessLevel.MEDIUM):
+    auth_staff = get_authenticated_staff(request, db)
+    if auth_staff.access_level not in (m.AccessLevel.HIGH, m.AccessLevel.MEDIUM):
         raise HTTPException(
             status_code=403,
             detail="Operation requires HIGH or MEDIUM access level"
         )
-    return operator
+    return auth_staff
 
 
 @groups.get("/", response_model=List[s.ClientGroupOut])
 def list_groups(request: Request, db: Session = Depends(get_db)):
-    get_authenticated_staff(request, db)
-    rows = (
-        db.query(m.ClientGroup, func.count(m.Client.id).label("client_count"))
-        .outerjoin(m.Client, m.Client.group_id == m.ClientGroup.id)
-        .group_by(m.ClientGroup.id)
-        .order_by(m.ClientGroup.name)
-        .all()
-    )
+    auth_staff = get_authenticated_staff(request, db)
+    if auth_staff.access_level == m.AccessLevel.HIGH:
+        rows = (
+            db.query(m.ClientGroup, func.count(m.Client.id).label("client_count"))
+            .outerjoin(m.Client, m.Client.group_id == m.ClientGroup.id)
+            .group_by(m.ClientGroup.id)
+            .order_by(m.ClientGroup.name)
+            .all()
+        )
+    else:
+        rows = (
+            db.query(m.ClientGroup, func.count(m.Client.id).label("client_count"))
+            .outerjoin(
+                m.Client,
+                and_(
+                    m.Client.group_id == m.ClientGroup.id,
+                    m.Client.assigned_staff_id == auth_staff.id
+                )
+            )
+            .group_by(m.ClientGroup.id)
+            .order_by(m.ClientGroup.name)
+            .all()
+        )
     result = []
     for grp, cnt in rows:
         result.append(s.ClientGroupOut(id=grp.id, name=grp.name, client_count=cnt))
@@ -401,11 +535,18 @@ def list_groups(request: Request, db: Session = Depends(get_db)):
 
 @groups.get("/{group_id}", response_model=s.ClientGroupDetailOut)
 def get_group(group_id: int, request: Request, db: Session = Depends(get_db)):
-    get_authenticated_staff(request, db)
+    auth_staff = get_authenticated_staff(request, db)
     group = db.get(m.ClientGroup, group_id)
     if not group:
         raise HTTPException(404, "Group not found")
-    return group
+    visible_clients = group.clients
+    if auth_staff.access_level != m.AccessLevel.HIGH:
+        visible_clients = [c for c in group.clients if c.assigned_staff_id == auth_staff.id]
+    return s.ClientGroupDetailOut(
+        id=group.id,
+        name=group.name,
+        clients=[s.ClientOut.model_validate(c) for c in visible_clients]
+    )
 
 
 @groups.post("/", response_model=s.ClientGroupOut, status_code=201)
@@ -465,12 +606,14 @@ def delete_group(group_id: int, request: Request, db: Session = Depends(get_db))
 
 @groups.post("/{group_id}/clients/{client_id}", response_model=s.ClientOut)
 def assign_client_to_group(group_id: int, client_id: int, request: Request, db: Session = Depends(get_db)):
-    require_group_management_access(request, db)
+    auth_staff = require_group_management_access(request, db)
     group = db.get(m.ClientGroup, group_id)
     if not group:
         raise HTTPException(404, "Group not found")
     client = db.get(m.Client, client_id)
     if not client:
+        raise HTTPException(404, "Client not found")
+    if auth_staff.access_level != m.AccessLevel.HIGH and client.assigned_staff_id != auth_staff.id:
         raise HTTPException(404, "Client not found")
 
     client.group_id = group.id
@@ -481,12 +624,14 @@ def assign_client_to_group(group_id: int, client_id: int, request: Request, db: 
 
 @groups.delete("/{group_id}/clients/{client_id}", response_model=s.ClientOut)
 def remove_client_from_group(group_id: int, client_id: int, request: Request, db: Session = Depends(get_db)):
-    require_group_management_access(request, db)
+    auth_staff = require_group_management_access(request, db)
     group = db.get(m.ClientGroup, group_id)
     if not group:
         raise HTTPException(404, "Group not found")
     client = db.get(m.Client, client_id)
     if not client:
+        raise HTTPException(404, "Client not found")
+    if auth_staff.access_level != m.AccessLevel.HIGH and client.assigned_staff_id != auth_staff.id:
         raise HTTPException(404, "Client not found")
 
     if client.group_id != group.id:
