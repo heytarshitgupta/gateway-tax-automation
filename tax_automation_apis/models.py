@@ -80,6 +80,7 @@ class Client(Base):
     business_name = Column(String(150), nullable=False)
     contact_name = Column(String(100), nullable=False)
     mobile_number = Column(String(20), unique=True, nullable=False)
+    alternative_mobile = Column(String(20), nullable=True)
     gst_details = Column(String(20), nullable=True)
     pan_details = Column(String(15), nullable=True)
     tan_details = Column(String(15), nullable=True)

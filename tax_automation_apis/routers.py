@@ -1,7 +1,7 @@
 """CRUD routers. A small factory covers the simple tables; clients are custom (M2M categories)."""
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import func, and_
+from sqlalchemy import func, and_, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -337,9 +337,19 @@ def list_clients(request: Request, skip: int = 0, limit: int = 100, db: Session 
                     q = q.filter(m.Client.assigned_staff_id == int(val))
                 except ValueError:
                     pass
-    for f in ("is_active", "category_id"):
-        if f in request.query_params:
-            q = q.filter(getattr(m.Client, f) == request.query_params[f])
+    if "is_active" in request.query_params:
+        q = q.filter(m.Client.is_active == request.query_params["is_active"])
+    if "category_id" in request.query_params:
+        try:
+            cat_id = int(request.query_params["category_id"])
+            q = q.filter(
+                or_(
+                    m.Client.category_id == cat_id,
+                    m.Client.categories.any(m.Category.id == cat_id)
+                )
+            )
+        except ValueError:
+            pass
     return q.order_by(m.Client.id).offset(skip).limit(limit).all()
 
 
@@ -367,6 +377,8 @@ def create_client(request: Request, data: s.ClientCreate, db: Session = Depends(
             target = db.get(m.Staff, payload["assigned_staff_id"])
             if not target or not target.is_active:
                 raise HTTPException(400, "Assigned staff member does not exist or is inactive")
+    if data.category_ids and payload.get("category_id") is None:
+        payload["category_id"] = data.category_ids[0]
     obj = m.Client(**payload)
     obj.categories = _load_categories(db, data.category_ids)
     db.add(obj)
@@ -397,6 +409,8 @@ def update_client(client_id: int, request: Request, data: s.ClientUpdate, db: Se
         setattr(obj, k, v)
     if ids is not None:
         obj.categories = _load_categories(db, ids)
+        if "category_id" not in changes:
+            obj.category_id = ids[0] if ids else None
     try:
         db.commit()
     except IntegrityError as e:

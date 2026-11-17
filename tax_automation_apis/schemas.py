@@ -1,5 +1,6 @@
 
 """Pydantic schemas (request/response)"""
+import re
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional, List
@@ -104,6 +105,7 @@ class ClientBase(BaseModel):
     business_name: str
     contact_name: str
     mobile_number: str
+    alternative_mobile: Optional[str] = None
     email: Optional[str] = None
     alias_name: Optional[str] = None
     gst_details: Optional[str] = None
@@ -113,6 +115,28 @@ class ClientBase(BaseModel):
     assigned_staff_id: Optional[int] = None
     is_active: bool = True
 
+    @field_validator("email")
+    @classmethod
+    def validate_email_format(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            v = v.strip()
+            if not v:
+                return None
+            if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", v):
+                raise ValueError("Invalid email format")
+        return v
+
+    @field_validator("alternative_mobile")
+    @classmethod
+    def validate_alt_mobile(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            v = v.strip()
+            if not v:
+                return None
+            if len(v) > 20:
+                raise ValueError("Alternative mobile number must be 20 characters or fewer")
+        return v
+
 class ClientCreate(ClientBase):
     category_ids: List[int] = []   # many-to-many categories
 
@@ -120,6 +144,7 @@ class ClientUpdate(BaseModel):
     business_name: Optional[str] = None
     contact_name: Optional[str] = None
     mobile_number: Optional[str] = None
+    alternative_mobile: Optional[str] = None
     email: Optional[str] = None
     alias_name: Optional[str] = None
     gst_details: Optional[str] = None
@@ -129,6 +154,28 @@ class ClientUpdate(BaseModel):
     assigned_staff_id: Optional[int] = None
     is_active: Optional[bool] = None
     category_ids: Optional[List[int]] = None
+
+    @field_validator("email")
+    @classmethod
+    def validate_email_format(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            v = v.strip()
+            if not v:
+                return None
+            if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", v):
+                raise ValueError("Invalid email format")
+        return v
+
+    @field_validator("alternative_mobile")
+    @classmethod
+    def validate_alt_mobile(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            v = v.strip()
+            if not v:
+                return None
+            if len(v) > 20:
+                raise ValueError("Alternative mobile number must be 20 characters or fewer")
+        return v
 
 class ClientReassignRequest(BaseModel):
     assigned_staff_id: Optional[int] = None

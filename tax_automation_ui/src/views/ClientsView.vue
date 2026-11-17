@@ -10,6 +10,8 @@ import FormDrawer from '../layouts/FormDrawer.vue'
 const TEXT_FIELDS = [
   ['contact_name', 'Contact person'],
   ['mobile_number', 'Mobile number'],
+  ['alternative_mobile', 'Alternative mobile'],
+  ['email', 'Email ID'],
   ['gst_details', 'GST number'],
   ['pan_details', 'PAN'],
   ['tan_details', 'TAN'],
@@ -140,7 +142,7 @@ const visible = computed(() => {
     if (!q) return true
 
     // 1. Existing client fields match
-    const clientMatch = [c.business_name, c.alias_name, ...TEXT_FIELDS.map(([k]) => c[k])]
+    const clientMatch = [c.business_name, c.alias_name, c.email, c.alternative_mobile, ...TEXT_FIELDS.map(([k]) => c[k])]
       .some((v) => String(v ?? '').toLowerCase().includes(q))
     if (clientMatch) return true
 
@@ -157,8 +159,8 @@ const subtitle = computed(() => `${visible.value.length} of ${clients.value.leng
 
 // ---------- client form ----------
 const blankForm = () => ({
-  business_name: '', alias_name: '', contact_name: '', mobile_number: '', gst_details: '', pan_details: '', tan_details: '',
-  category_id: '', assigned_staff_id: '', is_active: true, category_ids: [],
+  business_name: '', alias_name: '', contact_name: '', mobile_number: '', alternative_mobile: '', email: '',
+  gst_details: '', pan_details: '', tan_details: '', category_id: '', assigned_staff_id: '', is_active: true, category_ids: [],
 })
 const fromClient = (c) => ({
   ...Object.fromEntries(['business_name', ...TEXT_FIELDS.map(([k]) => k)].map((k) => [k, c[k] ?? ''])),
@@ -166,16 +168,18 @@ const fromClient = (c) => ({
   category_id: c.category_id ?? '',
   assigned_staff_id: c.assigned_staff_id ?? '',
   is_active: !!c.is_active,
-  category_ids: (c.categories || []).map((x) => x.id),
+  category_ids: (c.categories && c.categories.length)
+    ? c.categories.map((x) => x.id)
+    : (c.category_id ? [c.category_id] : []),
 })
 const toBody = (f) => ({
   business_name: f.business_name.trim(),
   alias_name: f.alias_name?.trim() || null,
-  ...Object.fromEntries(TEXT_FIELDS.map(([k]) => [k, f[k].trim() || null])),
-  category_id: f.category_id === '' ? null : Number(f.category_id),
+  ...Object.fromEntries(TEXT_FIELDS.map(([k]) => [k, f[k]?.trim() || null])),
+  category_id: f.category_ids?.length > 0 ? f.category_ids[0] : (f.category_id === '' ? null : Number(f.category_id)),
   assigned_staff_id: f.assigned_staff_id === '' ? null : Number(f.assigned_staff_id),
   is_active: f.is_active,
-  category_ids: f.category_ids,
+  category_ids: f.category_ids || [],
 })
 
 const form = reactive(blankForm())
@@ -284,6 +288,17 @@ async function createGroupInEdit() {
 
 async function save() {
   if (!form.business_name.trim()) return (formError.value = 'Business name is required.')
+  if (form.email && form.email.trim()) {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+    if (!emailRegex.test(form.email.trim())) {
+      formError.value = 'Please enter a valid email address.'
+      return
+    }
+  }
+  if (form.alternative_mobile && form.alternative_mobile.trim().length > 20) {
+    formError.value = 'Alternative mobile number must be 20 characters or fewer.'
+    return
+  }
   if (editingId.value && !isHigh.value) {
     formError.value = 'Editing clients requires HIGH access.'
     return
@@ -859,7 +874,13 @@ async function removeMember(client) {
                 <span v-if="c.pan_details"> PAN {{ c.pan_details }}</span>
               </div>
             </td>
-            <td>{{ c.contact_name || '—' }}<div class="small">{{ c.mobile_number }}</div></td>
+            <td>
+              {{ c.contact_name || '—' }}
+              <div class="small">
+                {{ c.mobile_number }}<span v-if="c.alternative_mobile"> / {{ c.alternative_mobile }}</span>
+              </div>
+              <div v-if="c.email" class="small muted-text">{{ c.email }}</div>
+            </td>
             <td>
               <span v-for="cat in c.categories || []" :key="cat.id" class="chip">{{ cat.name }}</span>
               <span v-if="!c.categories?.length" class="small">—</span>
@@ -897,12 +918,6 @@ async function removeMember(client) {
         <label v-for="[key, label] in TEXT_FIELDS" :key="key">{{ label }}<input v-model="form[key]" /></label>
       </div>
       <div class="two">
-        <label>Primary category
-          <select v-model="form.category_id">
-            <option value="">None</option>
-            <option v-for="c in categories" :key="c.id" :value="c.id">{{ c.name }}</option>
-          </select>
-        </label>
         <label v-if="isHigh">Assigned staff
           <select v-model="form.assigned_staff_id">
             <option value="">Unassigned</option>
@@ -916,14 +931,16 @@ async function removeMember(client) {
             New clients are initially assigned to you. You can reassign them afterward.
           </div>
         </div>
+        <label class="check" style="margin-top: 1.75rem;">
+          <input type="checkbox" v-model="form.is_active" /> Client is active
+        </label>
       </div>
       <fieldset>
-        <legend>All applicable categories</legend>
+        <legend>Categories (Select all applicable)</legend>
         <label v-for="c in categories" :key="c.id" class="check">
           <input type="checkbox" :value="c.id" v-model="form.category_ids" /> {{ c.name }}
         </label>
       </fieldset>
-      <label class="check"><input type="checkbox" v-model="form.is_active" /> Client is active</label>
 
       <!-- Family Group Section inside Edit Client -->
       <div v-if="editingId" class="edit-group-section">
