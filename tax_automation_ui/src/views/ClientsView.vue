@@ -1,5 +1,5 @@
 <script setup>
-import { ref, reactive, computed, watch } from 'vue'
+import { ref, reactive, computed, watch, onMounted } from 'vue'
 import api from '../api'
 import { errMessage, useNotify, useList } from '../composables/useApi'
 import { useCurrentStaff } from '../composables/useCurrentStaff'
@@ -26,10 +26,40 @@ const canViewClientActions = computed(() => isHigh.value || isMedium.value)
 
 const search = ref('')
 const clientFilter = ref('all') // all | my_assigned | active | inactive | my_assigned_active | my_assigned_inactive
+const clientTypeFilter = ref('all') // all | REGULAR | TEMP
 const categoryFilter = ref('')
 const groupFilter = ref('') // '' (All groups) | 'ungrouped' | String(group_id)
 
-const { items: clients, loading, load } = useList('/clients/', fail)
+const clients = ref([])
+const loading = ref(false)
+
+async function load() {
+  loading.value = true
+  try {
+    const all = []
+    let skip = 0
+    const limit = 100
+    while (true) {
+      const res = await api.get('/clients/', { params: { skip, limit } })
+      const batch = res.data || []
+      all.push(...batch)
+      if (batch.length < limit) break
+      skip += limit
+    }
+    const seen = new Set()
+    clients.value = all.filter((c) => {
+      if (seen.has(c.id)) return false
+      seen.add(c.id)
+      return true
+    })
+  } catch (e) {
+    fail(e)
+  } finally {
+    loading.value = false
+  }
+}
+onMounted(load)
+
 const { items: categories } = useList('/categories/', fail)
 const { items: staff } = useList('/staff/', fail)
 const { items: groups, loading: groupsLoading, load: loadGroups } = useList('/groups/', fail)
@@ -137,6 +167,10 @@ const visible = computed(() => {
     }
 
     if (cat && c.category_id !== cat && !(c.categories || []).some((x) => x.id === cat)) return false
+    if (clientTypeFilter.value !== 'all') {
+      const ct = c.client_type || 'REGULAR'
+      if (ct !== clientTypeFilter.value) return false
+    }
     if (gf === 'ungrouped' && c.group_id != null) return false
     if (gf && gf !== 'ungrouped' && String(c.group_id) !== gf) return false
     if (!q) return true
@@ -161,10 +195,12 @@ const subtitle = computed(() => `${visible.value.length} of ${clients.value.leng
 const blankForm = () => ({
   business_name: '', alias_name: '', contact_name: '', mobile_number: '', alternative_mobile: '', email: '',
   gst_details: '', pan_details: '', tan_details: '', category_id: '', assigned_staff_id: '', is_active: true, category_ids: [],
+  client_type: 'REGULAR',
 })
 const fromClient = (c) => ({
   ...Object.fromEntries(['business_name', ...TEXT_FIELDS.map(([k]) => k)].map((k) => [k, c[k] ?? ''])),
   alias_name: c.alias_name ?? '',
+  client_type: c.client_type || 'REGULAR',
   category_id: c.category_id ?? '',
   assigned_staff_id: c.assigned_staff_id ?? '',
   is_active: !!c.is_active,
@@ -175,6 +211,7 @@ const fromClient = (c) => ({
 const toBody = (f) => ({
   business_name: f.business_name.trim(),
   alias_name: f.alias_name?.trim() || null,
+  client_type: f.client_type || 'REGULAR',
   ...Object.fromEntries(TEXT_FIELDS.map(([k]) => [k, f[k]?.trim() || null])),
   category_id: f.category_ids?.length > 0 ? f.category_ids[0] : (f.category_id === '' ? null : Number(f.category_id)),
   assigned_staff_id: f.assigned_staff_id === '' ? null : Number(f.assigned_staff_id),
@@ -834,6 +871,11 @@ async function removeMember(client) {
         <option v-if="isHigh" value="my_assigned_active">My assigned — Active</option>
         <option v-if="isHigh" value="my_assigned_inactive">My assigned — Inactive</option>
       </select>
+      <select v-model="clientTypeFilter" aria-label="Client type filter">
+        <option value="all">All types</option>
+        <option value="REGULAR">Regular</option>
+        <option value="TEMP">Temp</option>
+      </select>
       <select v-model="categoryFilter" aria-label="Category filter">
         <option value="">All categories</option>
         <option v-for="c in categories" :key="c.id" :value="c.id">{{ c.name }}</option>
@@ -866,6 +908,8 @@ async function removeMember(client) {
           <tr v-for="c in visible" :key="c.id">
             <td>
               <strong>{{ c.business_name }}</strong>
+              <span v-if="c.client_type === 'TEMP'" class="chip type-chip temp">Temp</span>
+              <span v-else class="chip type-chip regular">Regular</span>
               <span v-if="c.alias_name" class="chip alias-chip">Alias: {{ c.alias_name }}</span>
               <span v-if="getGroupName(c.group_id)" class="chip group-chip">Group: {{ getGroupName(c.group_id) }}</span>
               <span v-if="matchingMatterBadge(c.id)" class="chip matter-chip">Matter: {{ matchingMatterBadge(c.id) }}</span>
@@ -931,9 +975,24 @@ async function removeMember(client) {
             New clients are initially assigned to you. You can reassign them afterward.
           </div>
         </div>
-        <label class="check" style="margin-top: 1.75rem;">
-          <input type="checkbox" v-model="form.is_active" /> Client is active
-        </label>
+        <div class="type-status-col">
+          <label style="font-size: 0.88rem; font-weight: 600; color: var(--muted); margin-bottom: 0.25rem; display: block;">Client type</label>
+          <div style="display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.5rem;">
+            <button
+              type="button"
+              class="pill"
+              :class="form.client_type === 'REGULAR' ? 'on' : 'off'"
+              @click="form.client_type = form.client_type === 'REGULAR' ? 'TEMP' : 'REGULAR'"
+              :title="form.client_type === 'REGULAR' ? 'Click to switch to Temp' : 'Click to switch to Regular'"
+            >
+              {{ form.client_type === 'REGULAR' ? 'Regular' : 'Temp' }}
+            </button>
+            <span class="small muted-text">{{ form.client_type === 'REGULAR' ? 'Regular client' : 'Temp client' }}</span>
+          </div>
+          <label class="check">
+            <input type="checkbox" v-model="form.is_active" /> Client is active
+          </label>
+        </div>
       </div>
       <fieldset>
         <legend>Categories (Select all applicable)</legend>
@@ -1390,6 +1449,25 @@ async function removeMember(client) {
 </template>
 
 <style scoped>
+.type-chip {
+  margin-left: 0.4rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  vertical-align: middle;
+  padding: 0.1rem 0.45rem;
+  border-radius: 4px;
+}
+.type-chip.regular {
+  background: var(--ok-soft);
+  color: var(--ok);
+  border: 1px solid var(--line);
+}
+.type-chip.temp {
+  background: var(--warn-soft);
+  color: var(--warn);
+  border: 1px solid var(--line);
+}
+
 .alias-chip {
   margin-left: 0.4rem;
   font-size: 0.78rem;

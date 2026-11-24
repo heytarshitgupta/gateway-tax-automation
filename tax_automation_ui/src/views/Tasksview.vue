@@ -1,5 +1,5 @@
 <script setup>
-import { ref, reactive, computed } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
 import api from '../api'
 import { errMessage, useNotify, useList } from '../composables/useApi'
 import { useCurrentStaff } from '../composables/useCurrentStaff'
@@ -25,10 +25,45 @@ const nul = (v) => (v === '' || v === undefined ? null : v)
 const { error, toast, flash, fail } = useNotify()
 const { activeStaffId, isHigh, isMedium, isLow } = useCurrentStaff()
 const { items: tasks, loading, load } = useList('/tasks/', fail)
-const { items: clients } = useList('/clients/', fail)
+
+const clients = ref([])
+const loadingClients = ref(false)
+const clientFetchSucceeded = ref(false)
+
+async function loadClients() {
+  loadingClients.value = true
+  clientFetchSucceeded.value = false
+  try {
+    const all = []
+    let skip = 0
+    const limit = 100
+    while (true) {
+      const res = await api.get('/clients/', { params: { skip, limit } })
+      const batch = res.data || []
+      all.push(...batch)
+      if (batch.length < limit) break
+      skip += limit
+    }
+    const seen = new Set()
+    clients.value = all.filter((c) => {
+      if (seen.has(c.id)) return false
+      seen.add(c.id)
+      return true
+    })
+    clientFetchSucceeded.value = true
+  } catch (e) {
+    clientFetchSucceeded.value = false
+    fail(e)
+  } finally {
+    loadingClients.value = false
+  }
+}
+onMounted(loadClients)
+
 const { items: staff } = useList('/staff/', fail)
 
-const clientName = (id) => clients.value.find((c) => c.id === id)?.business_name || `Client #${id}`
+const getClient = (id) => clients.value.find((c) => c.id === id)
+const clientName = (id) => getClient(id)?.business_name || `Client #${id}`
 const staffName = (id) => staff.value.find((s) => s.id === id)?.name || ''
 const isOverdue = (t) => !CLOSED.includes(t.status) && day(t.due_date) && day(t.due_date) < todayStr()
 
@@ -42,9 +77,66 @@ const canEditTask = (t) => {
 
 // ---------- board ----------
 const search = ref('')
-const clientFilter = ref('')
+const clientFilter = ref('') // selected client id (string) or ''
+const boardClientSearch = ref('')
+const showBoardClientDropdown = ref(false)
 const staffFilter = ref('')
 const hideClosed = ref(false)
+
+const selectedBoardClient = computed(() => {
+  if (!clientFilter.value) return null
+  return clients.value.find((c) => c.id === Number(clientFilter.value)) || null
+})
+
+const boardMatchingClients = computed(() => {
+  const q = boardClientSearch.value.trim().toLowerCase()
+  if (!q) return clients.value.slice(0, 30)
+  return clients.value.filter((c) => {
+    return [c.business_name, c.alias_name, c.mobile_number]
+      .some((v) => String(v ?? '').toLowerCase().includes(q))
+  }).slice(0, 30)
+})
+
+function selectBoardClient(c) {
+  if (c === null) {
+    clientFilter.value = ''
+    boardClientSearch.value = ''
+  } else {
+    clientFilter.value = String(c.id)
+    boardClientSearch.value = c.business_name
+  }
+  showBoardClientDropdown.value = false
+}
+
+function clearBoardClientFilter() {
+  clientFilter.value = ''
+  boardClientSearch.value = ''
+  showBoardClientDropdown.value = false
+}
+
+watch(boardClientSearch, (newVal) => {
+  if (selectedBoardClient.value && newVal !== selectedBoardClient.value.business_name) {
+    clientFilter.value = ''
+  }
+})
+
+function onDocClick(e) {
+  const el = e.target
+  if (!el.closest('.board-client-input-wrapper')) {
+    showBoardClientDropdown.value = false
+  }
+  if (!el.closest('.client-search-wrapper')) {
+    showClientDropdown.value = false
+  }
+}
+
+onMounted(() => {
+  document.addEventListener('click', onDocClick)
+})
+
+onUnmounted(() => {
+  document.removeEventListener('click', onDocClick)
+})
 
 const filtered = computed(() => {
   const q = search.value.trim().toLowerCase()
@@ -115,6 +207,111 @@ const editingId = ref(null)
 const saving = ref(false)
 const formError = ref('')
 
+// ---------- client selection & inline creation ----------
+const clientSearchQuery = ref('')
+const selectedClient = ref(null)
+const showClientDropdown = ref(false)
+const highlightedIndex = ref(-1)
+const isCreatingInlineClient = ref(false)
+const newClientForm = reactive({
+  business_name: '',
+  alias_name: '',
+  mobile_number: '',
+  client_type: 'REGULAR',
+})
+
+const matchingClients = computed(() => {
+  const q = clientSearchQuery.value.trim().toLowerCase()
+  if (!q) return clients.value.slice(0, 30)
+  return clients.value.filter((c) => {
+    return [c.business_name, c.alias_name, c.mobile_number]
+      .some((v) => String(v ?? '').toLowerCase().includes(q))
+  }).slice(0, 30)
+})
+
+function selectExistingClient(client) {
+  selectedClient.value = client
+  form.client_id = client.id
+  clientSearchQuery.value = client.business_name
+  showClientDropdown.value = false
+  isCreatingInlineClient.value = false
+  highlightedIndex.value = -1
+}
+
+function clearSelectedClient() {
+  selectedClient.value = null
+  form.client_id = ''
+  clientSearchQuery.value = ''
+  showClientDropdown.value = false
+  isCreatingInlineClient.value = false
+  highlightedIndex.value = -1
+}
+
+function onClientSearchInput() {
+  if (selectedClient.value && clientSearchQuery.value !== selectedClient.value.business_name) {
+    selectedClient.value = null
+    form.client_id = ''
+  }
+  showClientDropdown.value = true
+  highlightedIndex.value = -1
+
+  const q = clientSearchQuery.value.trim()
+  if (
+    q &&
+    !editingId.value &&
+    isHigh.value &&
+    !loadingClients.value &&
+    clientFetchSucceeded.value &&
+    matchingClients.value.length === 0
+  ) {
+    startInlineClientCreation()
+  }
+}
+
+function onSearchKeydown(e) {
+  if (!showClientDropdown.value && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+    showClientDropdown.value = true
+    return
+  }
+  const list = matchingClients.value
+  if (e.key === 'ArrowDown') {
+    e.preventDefault()
+    if (!list.length) return
+    highlightedIndex.value = (highlightedIndex.value + 1) % list.length
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault()
+    if (!list.length) return
+    highlightedIndex.value = (highlightedIndex.value - 1 + list.length) % list.length
+  } else if (e.key === 'Enter') {
+    if (showClientDropdown.value && highlightedIndex.value >= 0 && list[highlightedIndex.value]) {
+      e.preventDefault()
+      selectExistingClient(list[highlightedIndex.value])
+    }
+  } else if (e.key === 'Escape') {
+    showClientDropdown.value = false
+  }
+}
+
+function startInlineClientCreation() {
+  isCreatingInlineClient.value = true
+  showClientDropdown.value = false
+  selectedClient.value = null
+  form.client_id = ''
+  newClientForm.business_name = ''
+  newClientForm.alias_name = ''
+  newClientForm.mobile_number = ''
+  newClientForm.client_type = 'REGULAR'
+}
+
+function cancelInlineClientCreation() {
+  isCreatingInlineClient.value = false
+  clientSearchQuery.value = ''
+  newClientForm.business_name = ''
+  newClientForm.alias_name = ''
+  newClientForm.mobile_number = ''
+  newClientForm.client_type = 'REGULAR'
+}
+
 function openForm(task = null, status = 'PENDING') {
   if (!task && !isHigh.value) return
   if (task && !canEditTask(task)) return
@@ -130,11 +327,54 @@ function openForm(task = null, status = 'PENDING') {
       }
     : blankForm(status))
   formError.value = ''
+
+  if (task) {
+    const existing = clients.value.find((c) => c.id === task.client_id)
+    if (existing) {
+      selectedClient.value = existing
+      clientSearchQuery.value = existing.business_name
+    } else {
+      selectedClient.value = { id: task.client_id, business_name: clientName(task.client_id), client_type: 'REGULAR' }
+      clientSearchQuery.value = clientName(task.client_id)
+    }
+    isCreatingInlineClient.value = false
+    showClientDropdown.value = false
+  } else {
+    selectedClient.value = null
+    clientSearchQuery.value = ''
+    showClientDropdown.value = false
+    cancelInlineClientCreation()
+  }
+
   showForm.value = true
 }
 
 async function save() {
-  if (!form.client_id || !form.matter.trim()) return (formError.value = 'Choose a client and describe the matter.')
+  if (!form.matter.trim()) {
+    formError.value = 'Please describe the matter.'
+    return
+  }
+
+  if (isCreatingInlineClient.value) {
+    if (!newClientForm.business_name.trim()) {
+      formError.value = 'Client business name is required.'
+      return
+    }
+    if (newClientForm.business_name.trim().length > 150) {
+      formError.value = 'Client business name cannot exceed 150 characters.'
+      return
+    }
+    if (newClientForm.mobile_number && newClientForm.mobile_number.trim().length > 20) {
+      formError.value = 'Mobile number cannot exceed 20 characters.'
+      return
+    }
+  } else {
+    if (!form.client_id) {
+      formError.value = 'Choose a client or create a new one.'
+      return
+    }
+  }
+
   if (!editingId.value && !isHigh.value) {
     formError.value = 'Creating matters requires HIGH access.'
     return
@@ -151,7 +391,6 @@ async function save() {
   formError.value = ''
   const staffId = form.staff_id === '' ? null : Number(form.staff_id)
   const body = {
-    client_id: Number(form.client_id),
     staff_id: staffId,
     matter: form.matter.trim(),
     assigned_staff: staffId ? staffName(staffId) : nul(form.assigned_staff), // keeps the name text in step
@@ -162,12 +401,28 @@ async function save() {
     remarks: nul(form.remarks.trim()),
     documents: nul(form.documents.trim()),
   }
+
+  if (editingId.value) {
+    body.client_id = Number(form.client_id)
+  } else {
+    if (isCreatingInlineClient.value) {
+      body.new_client = {
+        business_name: newClientForm.business_name.trim(),
+        alias_name: newClientForm.alias_name.trim() || null,
+        mobile_number: newClientForm.mobile_number.trim() || null,
+        client_type: newClientForm.client_type || 'REGULAR',
+      }
+    } else {
+      body.client_id = Number(form.client_id)
+    }
+  }
+
   try {
     if (editingId.value) await api.patch(`/tasks/${editingId.value}`, body)
     else await api.post('/tasks/', body)
     flash(editingId.value ? 'Task updated' : 'Task added')
     showForm.value = false
-    await load()
+    await Promise.all([load(), loadClients()])
   } catch (e) {
     formError.value = errMessage(e)
   } finally {
@@ -195,10 +450,59 @@ async function remove(t) {
 
     <div class="filters">
       <input v-model="search" type="search" placeholder="Search matter, remarks or client" aria-label="Search tasks" />
-      <select v-model="clientFilter" aria-label="Client filter">
-        <option value="">All clients</option>
-        <option v-for="c in clients" :key="c.id" :value="c.id">{{ c.business_name }}</option>
-      </select>
+      <div class="board-client-filter">
+        <div class="board-client-input-wrapper">
+          <input
+            v-model="boardClientSearch"
+            @focus="showBoardClientDropdown = true"
+            @input="showBoardClientDropdown = true"
+            placeholder="All clients (type to filter)"
+            aria-label="Client filter"
+            class="client-filter-input"
+            autocomplete="off"
+          />
+          <button
+            v-if="clientFilter || boardClientSearch"
+            type="button"
+            class="mini board-filter-clear-btn"
+            @click="clearBoardClientFilter"
+            title="Clear client filter"
+            aria-label="Clear client filter"
+          >
+            ✕
+          </button>
+          <div v-if="showBoardClientDropdown" class="board-client-dropdown">
+            <div
+              class="board-dropdown-item"
+              :class="{ active: !clientFilter }"
+              @mousedown.prevent="selectBoardClient(null)"
+            >
+              <strong>All clients</strong>
+            </div>
+            <div
+              v-for="c in boardMatchingClients"
+              :key="c.id"
+              class="board-dropdown-item"
+              :class="{ active: clientFilter === String(c.id) }"
+              @mousedown.prevent="selectBoardClient(c)"
+            >
+              <div class="board-dropdown-item-main">
+                <span class="client-id-badge">#{{ c.id }}</span>
+                <strong>{{ c.business_name }}</strong>
+                <span class="muted-text">({{ c.mobile_number || 'No mobile' }})</span>
+                <span v-if="c.client_type === 'TEMP'" class="chip type-chip temp">Temp</span>
+                <span v-else class="chip type-chip regular">Regular</span>
+              </div>
+              <div v-if="c.alias_name" class="small muted-text">
+                Alias: {{ c.alias_name }}
+              </div>
+            </div>
+            <div v-if="!boardMatchingClients.length" class="dropdown-no-results">
+              <p class="small muted-text">No matching clients found.</p>
+            </div>
+          </div>
+        </div>
+      </div>
       <select v-model="staffFilter" aria-label="Staff filter">
         <option value="">All staff</option>
         <option v-for="s in staff" :key="s.id" :value="s.id">{{ s.name }}</option>
@@ -223,7 +527,10 @@ async function remove(t) {
 
         <article v-for="t in col.items" :key="t.id" class="card" :class="{ late: isOverdue(t) }"
           :draggable="canEditTask(t)" @dragstart="dragId = t.id" @dragend="dragId = dragOver = null">
-          <div class="card-client">{{ clientName(t.client_id) }}</div>
+          <div class="card-client">
+            {{ clientName(t.client_id) }}
+            <span v-if="getClient(t.client_id)?.client_type === 'TEMP'" class="chip type-chip temp">Temp</span>
+          </div>
           <h3>{{ t.matter }}</h3>
           <div class="meta">
             <span :class="{ 'late-text': isOverdue(t) }">Due {{ fmtDate(t.due_date) }}</span>
@@ -247,12 +554,122 @@ async function remove(t) {
     <FormDrawer v-if="showForm" :title="editingId ? 'Edit task' : 'Add task'" :error="formError"
       :saving="saving" :submit-label="editingId ? 'Save changes' : 'Add task'"
       @close="showForm = false" @submit="save">
-      <label>Client *
-        <select v-model="form.client_id" :disabled="!isHigh" required>
-          <option value="" disabled>Choose a client</option>
-          <option v-for="c in clients" :key="c.id" :value="c.id">{{ c.business_name }}</option>
-        </select>
-      </label>
+      <!-- Selected Client display -->
+      <div v-if="selectedClient && !isCreatingInlineClient" class="selected-client-card">
+        <div class="selected-client-info">
+          <div class="client-title-row">
+            <strong>{{ selectedClient.business_name }}</strong>
+            <span v-if="selectedClient.client_type === 'TEMP'" class="chip type-chip temp">Temp</span>
+            <span v-else class="chip type-chip regular">Regular</span>
+            <span v-if="selectedClient.alias_name" class="chip alias-chip">Alias: {{ selectedClient.alias_name }}</span>
+          </div>
+          <div class="small muted-text">
+            <span>{{ selectedClient.mobile_number || 'No mobile' }}</span>
+          </div>
+        </div>
+        <button
+          v-if="isHigh && !editingId"
+          type="button"
+          class="mini"
+          @click="clearSelectedClient"
+          aria-label="Change client"
+        >
+          ✕ Change
+        </button>
+        <button
+          v-else-if="isHigh && editingId"
+          type="button"
+          class="mini"
+          @click="clearSelectedClient"
+          aria-label="Reassign client"
+        >
+          Change client
+        </button>
+      </div>
+
+      <!-- Searchable autocomplete input when no client is selected and not creating inline -->
+      <div v-else-if="!isCreatingInlineClient" class="client-search-wrapper">
+        <label>Client *
+          <input
+            v-model="clientSearchQuery"
+            @input="onClientSearchInput"
+            @focus="showClientDropdown = true"
+            @keydown="onSearchKeydown"
+            placeholder="Search by client name, alias, or mobile..."
+            :disabled="!isHigh"
+            autocomplete="off"
+            aria-label="Search client"
+          />
+        </label>
+
+        <!-- Dropdown menu -->
+        <div v-if="showClientDropdown" class="autocomplete-dropdown">
+          <div
+            v-for="(c, idx) in matchingClients"
+            :key="c.id"
+            class="dropdown-item"
+            :class="{ active: idx === highlightedIndex }"
+            @mousedown.prevent="selectExistingClient(c)"
+          >
+            <div class="dropdown-item-main">
+              <strong>{{ c.business_name }}</strong>
+              <span class="muted-text">({{ c.mobile_number || 'No mobile' }})</span>
+              <span v-if="c.client_type === 'TEMP'" class="chip type-chip temp">Temp</span>
+              <span v-else class="chip type-chip regular">Regular</span>
+            </div>
+            <div v-if="c.alias_name" class="small muted-text">
+              Alias: {{ c.alias_name }}
+            </div>
+          </div>
+
+          <div v-if="!matchingClients.length" class="dropdown-no-results">
+            <p class="small muted-text">No matching clients found.</p>
+          </div>
+
+          <!-- Option to create new client inline (HIGH only, and not during edit) -->
+          <div v-if="isHigh && !editingId" class="dropdown-create-action" @mousedown.prevent="startInlineClientCreation">
+            <button type="button" class="btn-create-inline" @click="startInlineClientCreation">
+              + New client
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Inline Client Creation Form -->
+      <div v-else class="inline-client-box">
+        <div class="inline-client-header">
+          <span class="inline-title">New Client Details</span>
+          <button type="button" class="mini" @click="cancelInlineClientCreation">Cancel & Search</button>
+        </div>
+        <div class="two">
+          <label>Client business name *
+            <input v-model="newClientForm.business_name" required maxlength="150" placeholder="e.g. Acme Corp" />
+          </label>
+          <label>Alias name (optional)
+            <input v-model="newClientForm.alias_name" maxlength="150" placeholder="e.g. Acme" />
+          </label>
+        </div>
+        <div class="two">
+          <label>Mobile number (optional)
+            <input v-model="newClientForm.mobile_number" maxlength="20" placeholder="e.g. 9876543210" />
+          </label>
+          <div class="client-type-field">
+            <label style="font-size: 0.88rem; font-weight: 600; color: var(--muted); margin-bottom: 0.25rem; display: block;">Client type</label>
+            <div style="display: flex; align-items: center; gap: 0.6rem; margin-top: 0.25rem;">
+              <button
+                type="button"
+                class="pill"
+                :class="newClientForm.client_type === 'REGULAR' ? 'on' : 'off'"
+                @click="newClientForm.client_type = newClientForm.client_type === 'REGULAR' ? 'TEMP' : 'REGULAR'"
+                :title="newClientForm.client_type === 'REGULAR' ? 'Click to switch to Temp' : 'Click to switch to Regular'"
+              >
+                {{ newClientForm.client_type === 'REGULAR' ? 'Regular' : 'Temp' }}
+              </button>
+              <span class="small muted-text">{{ newClientForm.client_type === 'REGULAR' ? 'Regular client' : 'Temp client' }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
       <label>Matter *<input v-model="form.matter" required placeholder="e.g. GST return for October" /></label>
       <div class="two">
         <label>Assigned to
@@ -277,3 +694,228 @@ async function remove(t) {
     </FormDrawer>
   </section>
 </template>
+
+<style scoped>
+.type-chip {
+  margin-left: 0.4rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  vertical-align: middle;
+  padding: 0.1rem 0.45rem;
+  border-radius: 4px;
+}
+.type-chip.regular {
+  background: var(--ok-soft);
+  color: var(--ok);
+  border: 1px solid var(--line);
+}
+.type-chip.temp {
+  background: var(--warn-soft);
+  color: var(--warn);
+  border: 1px solid var(--line);
+}
+
+.alias-chip {
+  margin-left: 0.4rem;
+  font-size: 0.78rem;
+  font-weight: 500;
+  vertical-align: middle;
+  background: var(--sunken);
+  color: var(--muted);
+  border: 1px solid var(--line);
+}
+
+.selected-client-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.6rem 0.8rem;
+  background: var(--paper);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  margin-bottom: 0.5rem;
+}
+
+.selected-client-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.client-title-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.client-search-wrapper {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.autocomplete-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 30;
+  max-height: 220px;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+  margin-top: 0.25rem;
+}
+
+.dropdown-item {
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--line);
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.dropdown-item:last-child {
+  border-bottom: none;
+}
+
+.dropdown-item:hover, .dropdown-item.active {
+  background: var(--sunken);
+}
+
+.dropdown-item-main {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.dropdown-no-results {
+  padding: 0.6rem 0.75rem;
+  text-align: center;
+}
+
+.dropdown-create-action {
+  padding: 0.4rem;
+  background: var(--paper);
+  border-top: 1px solid var(--line);
+}
+
+.btn-create-inline {
+  width: 100%;
+  padding: 0.4rem 0.6rem;
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--accent);
+  background: var(--surface);
+  border: 1px dashed var(--accent);
+  border-radius: 4px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.btn-create-inline:hover {
+  background: var(--accent-soft);
+}
+
+.inline-client-box {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0.8rem;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--paper);
+}
+
+.inline-client-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.inline-title {
+  font-weight: 600;
+  font-size: 0.88rem;
+  color: var(--accent);
+}
+
+.board-client-filter {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.board-client-input-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.client-filter-input {
+  min-width: 220px;
+  padding-right: 1.8rem;
+}
+
+.board-filter-clear-btn {
+  position: absolute;
+  right: 0.3rem;
+  padding: 0.1rem 0.35rem;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.board-client-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  min-width: 280px;
+  max-width: 380px;
+  max-height: 250px;
+  overflow-y: auto;
+  z-index: 40;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  margin-top: 0.25rem;
+}
+
+.board-dropdown-item {
+  padding: 0.45rem 0.7rem;
+  border-bottom: 1px solid var(--line);
+  cursor: pointer;
+  font-size: 0.85rem;
+  transition: background 0.15s ease;
+}
+
+.board-dropdown-item:last-child {
+  border-bottom: none;
+}
+
+.board-dropdown-item:hover, .board-dropdown-item.active {
+  background: var(--sunken);
+}
+
+.board-dropdown-item-main {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.client-id-badge {
+  font-size: 0.72rem;
+  font-family: monospace;
+  padding: 0.05rem 0.3rem;
+  border-radius: 3px;
+  background: var(--sunken);
+  color: var(--muted);
+  border: 1px solid var(--line);
+}
+</style>

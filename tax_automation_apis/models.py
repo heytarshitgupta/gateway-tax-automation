@@ -1,7 +1,7 @@
 """SQLAlchemy ORM models mirroring schema.sql"""
 from sqlalchemy import (
     Column, Integer, String, Boolean, DECIMAL, Date, DateTime,
-    ForeignKey, Enum, func, Table, Text
+    ForeignKey, Enum, func, Table, Text, Index
 )
 from sqlalchemy.orm import relationship
 from database import Base
@@ -30,6 +30,11 @@ class AccessLevel(str, enum.Enum):
     HIGH = "HIGH"
     MEDIUM = "MEDIUM"
     LOW = "LOW"
+
+
+class ClientType(str, enum.Enum):
+    REGULAR = "REGULAR"
+    TEMP = "TEMP"
 
 
 client_categories = Table(
@@ -76,16 +81,20 @@ class ClientGroup(Base):
 
 class Client(Base):
     __tablename__ = "clients"
+    __table_args__ = (
+        Index("idx_clients_mobile_number", "mobile_number"),
+    )
     id = Column(Integer, primary_key=True, index=True)
     business_name = Column(String(150), nullable=False)
     contact_name = Column(String(100), nullable=False)
-    mobile_number = Column(String(20), unique=True, nullable=False)
+    mobile_number = Column(String(20), nullable=True)
     alternative_mobile = Column(String(20), nullable=True)
     gst_details = Column(String(20), nullable=True)
     pan_details = Column(String(15), nullable=True)
     tan_details = Column(String(15), nullable=True)
     email = Column(String(255), nullable=True)
     alias_name = Column(String(150), nullable=True, index=True)
+    client_type = Column(String(20), default=ClientType.REGULAR.value, server_default="REGULAR", nullable=False)
     category_id = Column(Integer, ForeignKey("categories.id", ondelete="SET NULL"), nullable=True)
     assigned_staff_id = Column(Integer, ForeignKey("staff.id", ondelete="SET NULL"), nullable=True)
     group_id = Column(Integer, ForeignKey("client_groups.id", ondelete="SET NULL"), nullable=True)

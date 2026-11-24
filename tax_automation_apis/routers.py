@@ -11,6 +11,17 @@ from database import get_db
 from auth import get_authenticated_staff, get_effective_staff, require_high_access
 
 
+def _safe_integrity_error(e: IntegrityError, default_msg: str = "Conflicting or invalid record details.") -> HTTPException:
+    msg = str(e.orig) if hasattr(e, "orig") else str(e)
+    if "Duplicate entry" in msg or "1062" in msg:
+        return HTTPException(409, "A record with matching unique details already exists.")
+    if "foreign key" in msg.lower() or "1452" in msg or "1217" in msg:
+        return HTTPException(400, "Referenced record does not exist or has active dependencies.")
+    if "chk_client_type" in msg or "3819" in msg:
+        return HTTPException(400, "Invalid client type. Must be REGULAR or TEMP.")
+    return HTTPException(409, default_msg)
+
+
 def crud_router(prefix, tag, Model, Create, Update, Out, filters=()):
     r = APIRouter(prefix=prefix, tags=[tag])
 
@@ -45,13 +56,17 @@ def crud_router(prefix, tag, Model, Create, Update, Out, filters=()):
             client = db.get(m.Client, client_id) if client_id else None
             if not client or client.assigned_staff_id != auth_staff.id:
                 raise HTTPException(404, "Client not found")
+        if Model is m.MessageHistory:
+            target_client = db.get(m.Client, getattr(data, "client_id", None))
+            if not target_client or not target_client.mobile_number:
+                raise HTTPException(400, "Cannot dispatch message: client does not have a valid mobile number.")
         obj = Model(**data.model_dump())
         db.add(obj)
         try:
             db.commit()
         except IntegrityError as e:
             db.rollback()
-            raise HTTPException(409, f"Integrity error: {e.orig}")
+            raise _safe_integrity_error(e, f"{tag} could not be created due to conflicting data.")
         db.refresh(obj)
         return obj
 
@@ -71,7 +86,7 @@ def crud_router(prefix, tag, Model, Create, Update, Out, filters=()):
             db.commit()
         except IntegrityError as e:
             db.rollback()
-            raise HTTPException(409, f"Integrity error: {e.orig}")
+            raise _safe_integrity_error(e, f"{tag} could not be updated due to conflicting data.")
         db.refresh(obj)
         return obj
 
@@ -150,7 +165,7 @@ def create_staff(request: Request, data: s.StaffCreate, db: Session = Depends(ge
         db.commit()
     except IntegrityError as e:
         db.rollback()
-        raise HTTPException(409, f"Integrity error: {e.orig}")
+        raise _safe_integrity_error(e, "Staff member could not be created.")
     db.refresh(obj)
     return obj
 
@@ -182,7 +197,7 @@ def update_staff(item_id: int, request: Request, data: s.StaffUpdate, db: Sessio
         db.commit()
     except IntegrityError as e:
         db.rollback()
-        raise HTTPException(409, f"Integrity error: {e.orig}")
+        raise _safe_integrity_error(e, "Staff member could not be updated.")
     db.refresh(obj)
     return obj
 
@@ -208,7 +223,7 @@ def delete_staff(item_id: int, request: Request, db: Session = Depends(get_db)):
         db.commit()
     except IntegrityError as e:
         db.rollback()
-        raise HTTPException(409, f"Integrity error: {e.orig}")
+        raise _safe_integrity_error(e, "Cannot delete staff member with linked records.")
 
 
 # ---------- Tasks / Matters ----------
@@ -252,16 +267,73 @@ def get_task(item_id: int, request: Request, db: Session = Depends(get_db)):
 
 @tasks.post("/", response_model=s.TaskOut, status_code=201)
 def create_task(request: Request, data: s.TaskCreate, db: Session = Depends(get_db)):
-    require_high_access(request, db)
-    obj = m.ClientTask(**data.model_dump())
-    db.add(obj)
-    try:
-        db.commit()
-    except IntegrityError as e:
-        db.rollback()
-        raise HTTPException(409, f"Integrity error: {e.orig}")
-    db.refresh(obj)
-    return obj
+    auth_staff = require_high_access(request, db)
+
+    # Validate assigned staff member if provided
+    staff_id = data.staff_id
+    assigned_staff_name = data.assigned_staff
+    if staff_id is not None:
+        target_staff = db.get(m.Staff, staff_id)
+        if not target_staff or not target_staff.is_active:
+            raise HTTPException(400, "Assigned staff member does not exist or is inactive")
+        if not assigned_staff_name:
+            assigned_staff_name = target_staff.name
+
+    # Workflow A: Existing Client
+    if data.client_id is not None:
+        client = db.get(m.Client, data.client_id)
+        if not client:
+            raise HTTPException(404, "Client not found")
+        task_payload = data.model_dump(exclude={"new_client"})
+        if assigned_staff_name:
+            task_payload["assigned_staff"] = assigned_staff_name
+        obj = m.ClientTask(**task_payload)
+        db.add(obj)
+        try:
+            db.commit()
+        except IntegrityError as e:
+            db.rollback()
+            raise _safe_integrity_error(e, "Task could not be created.")
+        except Exception:
+            db.rollback()
+            raise
+        db.refresh(obj)
+        return obj
+
+    # Workflow B: Inline New Client
+    if data.new_client is not None:
+        nc = data.new_client
+        derived_contact = nc.business_name[:100]
+        ct_val = nc.client_type.value if hasattr(nc.client_type, "value") else nc.client_type
+        new_client_obj = m.Client(
+            business_name=nc.business_name,
+            contact_name=derived_contact,
+            alias_name=nc.alias_name,
+            mobile_number=nc.mobile_number,
+            client_type=ct_val,
+            assigned_staff_id=staff_id,
+            is_active=True
+        )
+        db.add(new_client_obj)
+        try:
+            db.flush()  # Populates new_client_obj.id within open transaction
+            task_payload = data.model_dump(exclude={"new_client", "client_id"})
+            task_payload["client_id"] = new_client_obj.id
+            if assigned_staff_name:
+                task_payload["assigned_staff"] = assigned_staff_name
+            obj = m.ClientTask(**task_payload)
+            db.add(obj)
+            db.commit()
+        except IntegrityError as e:
+            db.rollback()
+            raise _safe_integrity_error(e, "Task or client could not be created.")
+        except Exception:
+            db.rollback()
+            raise
+        db.refresh(obj)
+        return obj
+
+    raise HTTPException(400, "Either client_id or new_client must be provided")
 
 
 @tasks.patch("/{item_id}", response_model=s.TaskOut)
@@ -295,7 +367,7 @@ def update_task(item_id: int, request: Request, data: s.TaskUpdate, db: Session 
         db.commit()
     except IntegrityError as e:
         db.rollback()
-        raise HTTPException(409, f"Integrity error: {e.orig}")
+        raise _safe_integrity_error(e, "Task could not be updated.")
     db.refresh(obj)
     return obj
 
@@ -350,6 +422,11 @@ def list_clients(request: Request, skip: int = 0, limit: int = 100, db: Session 
             )
         except ValueError:
             pass
+    if "client_type" in request.query_params:
+        ct_param = request.query_params["client_type"].strip().upper()
+        if ct_param not in (m.ClientType.REGULAR.value, m.ClientType.TEMP.value):
+            raise HTTPException(400, f"Invalid client_type filter: {request.query_params['client_type']}. Must be REGULAR or TEMP.")
+        q = q.filter(m.Client.client_type == ct_param)
     return q.order_by(m.Client.id).offset(skip).limit(limit).all()
 
 
@@ -370,6 +447,8 @@ def create_client(request: Request, data: s.ClientCreate, db: Session = Depends(
     if auth_staff.access_level not in (m.AccessLevel.HIGH, m.AccessLevel.MEDIUM):
         raise HTTPException(403, "Adding clients requires HIGH or MEDIUM access level")
     payload = data.model_dump(exclude={"category_ids"})
+    if "client_type" in payload and hasattr(payload["client_type"], "value"):
+        payload["client_type"] = payload["client_type"].value
     if auth_staff.access_level == m.AccessLevel.MEDIUM:
         payload["assigned_staff_id"] = auth_staff.id
     elif auth_staff.access_level == m.AccessLevel.HIGH:
@@ -386,7 +465,7 @@ def create_client(request: Request, data: s.ClientCreate, db: Session = Depends(
         db.commit()
     except IntegrityError as e:
         db.rollback()
-        raise HTTPException(409, f"Integrity error: {e.orig}")
+        raise _safe_integrity_error(e, "Client could not be created due to database integrity constraints.")
     db.refresh(obj)
     return obj
 
@@ -406,6 +485,8 @@ def update_client(client_id: int, request: Request, data: s.ClientUpdate, db: Se
             raise HTTPException(400, "Assigned staff member does not exist or is inactive")
     ids = changes.pop("category_ids", None)
     for k, v in changes.items():
+        if hasattr(v, "value"):
+            v = v.value
         setattr(obj, k, v)
     if ids is not None:
         obj.categories = _load_categories(db, ids)
@@ -415,7 +496,7 @@ def update_client(client_id: int, request: Request, data: s.ClientUpdate, db: Se
         db.commit()
     except IntegrityError as e:
         db.rollback()
-        raise HTTPException(409, f"Integrity error: {e.orig}")
+        raise _safe_integrity_error(e, "Client could not be updated due to database integrity constraints.")
     db.refresh(obj)
     return obj
 
@@ -452,7 +533,7 @@ def reassign_client(client_id: int, request: Request, data: s.ClientReassignRequ
         db.commit()
     except IntegrityError as e:
         db.rollback()
-        raise HTTPException(409, f"Integrity error: {e.orig}")
+        raise _safe_integrity_error(e, "Client reassignment failed due to database integrity constraints.")
     db.refresh(obj)
     return obj
 

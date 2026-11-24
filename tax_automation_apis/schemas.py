@@ -3,9 +3,9 @@
 import re
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Optional, List
-from pydantic import BaseModel, ConfigDict, field_validator
-from models import MessageStatus, TaskStatus, AccessLevel
+from typing import Optional, List, Any
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from models import MessageStatus, TaskStatus, AccessLevel, ClientType
 
 
 class ORM(BaseModel):
@@ -104,7 +104,7 @@ class AuthMeResponse(StaffOut):
 class ClientBase(BaseModel):
     business_name: str
     contact_name: str
-    mobile_number: str
+    mobile_number: Optional[str] = None
     alternative_mobile: Optional[str] = None
     email: Optional[str] = None
     alias_name: Optional[str] = None
@@ -114,6 +114,25 @@ class ClientBase(BaseModel):
     category_id: Optional[int] = None
     assigned_staff_id: Optional[int] = None
     is_active: bool = True
+    client_type: ClientType = ClientType.REGULAR
+
+    @field_validator("mobile_number", mode="before")
+    @classmethod
+    def validate_mobile_number(cls, v: Any) -> Optional[str]:
+        if v is not None:
+            v = str(v).strip()
+            if not v:
+                return None
+            if len(v) > 20:
+                raise ValueError("Mobile number must be 20 characters or fewer")
+        return v
+
+    @field_validator("client_type", mode="before")
+    @classmethod
+    def validate_client_type(cls, v: Any) -> Any:
+        if v is None:
+            raise ValueError("Client type cannot be null")
+        return v
 
     @field_validator("email")
     @classmethod
@@ -137,8 +156,58 @@ class ClientBase(BaseModel):
                 raise ValueError("Alternative mobile number must be 20 characters or fewer")
         return v
 
+
+class ClientCreateInline(BaseModel):
+    business_name: str
+    alias_name: Optional[str] = None
+    mobile_number: Optional[str] = None
+    client_type: ClientType = ClientType.REGULAR
+
+    @field_validator("business_name")
+    @classmethod
+    def validate_business_name(cls, v: str) -> str:
+        if v is None:
+            raise ValueError("Client name is required")
+        v = v.strip()
+        if not v:
+            raise ValueError("Client name cannot be blank or whitespace-only")
+        if len(v) > 150:
+            raise ValueError("Client name must not exceed 150 characters")
+        return v
+
+    @field_validator("alias_name")
+    @classmethod
+    def validate_alias_name(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            v = v.strip()
+            if not v:
+                return None
+            if len(v) > 150:
+                raise ValueError("Alias name must not exceed 150 characters")
+        return v
+
+    @field_validator("mobile_number", mode="before")
+    @classmethod
+    def validate_mobile_number(cls, v: Any) -> Optional[str]:
+        if v is not None:
+            v = str(v).strip()
+            if not v:
+                return None
+            if len(v) > 20:
+                raise ValueError("Mobile number must not exceed 20 characters")
+        return v
+
+    @field_validator("client_type", mode="before")
+    @classmethod
+    def validate_client_type(cls, v: Any) -> Any:
+        if v is None:
+            raise ValueError("Client type cannot be null")
+        return v
+
+
 class ClientCreate(ClientBase):
     category_ids: List[int] = []   # many-to-many categories
+
 
 class ClientUpdate(BaseModel):
     business_name: Optional[str] = None
@@ -154,6 +223,25 @@ class ClientUpdate(BaseModel):
     assigned_staff_id: Optional[int] = None
     is_active: Optional[bool] = None
     category_ids: Optional[List[int]] = None
+    client_type: Optional[ClientType] = None
+
+    @field_validator("mobile_number", mode="before")
+    @classmethod
+    def validate_mobile_number(cls, v: Any) -> Optional[str]:
+        if v is not None:
+            v = str(v).strip()
+            if not v:
+                return None
+            if len(v) > 20:
+                raise ValueError("Mobile number must be 20 characters or fewer")
+        return v
+
+    @field_validator("client_type", mode="before")
+    @classmethod
+    def validate_client_type(cls, v: Any) -> Any:
+        if v is None:
+            raise ValueError("Client type cannot be null")
+        return v
 
     @field_validator("email")
     @classmethod
@@ -283,7 +371,7 @@ class MessageOut(MessageBase, ORM):
 
 # Client task
 class TaskBase(BaseModel):
-    client_id: int
+    client_id: Optional[int] = None
     staff_id: Optional[int] = None
     matter: str
     assigned_staff: Optional[str] = None
@@ -294,7 +382,26 @@ class TaskBase(BaseModel):
     remarks: Optional[str] = None
     documents: Optional[str] = None
 
-class TaskCreate(TaskBase): pass
+
+class TaskCreate(TaskBase):
+    new_client: Optional[ClientCreateInline] = None
+
+    @model_validator(mode="after")
+    def validate_client_selection(self) -> "TaskCreate":
+        has_client_id = self.client_id is not None
+        has_new_client = self.new_client is not None
+
+        if has_client_id and has_new_client:
+            raise ValueError("Provide either client_id or new_client, not both")
+        if not has_client_id and not has_new_client:
+            raise ValueError("Either client_id or new_client must be provided")
+
+        if has_client_id:
+            if not isinstance(self.client_id, int) or self.client_id <= 0:
+                raise ValueError("client_id must be a positive integer")
+
+        return self
+
 
 class TaskUpdate(BaseModel):
     client_id: Optional[int] = None
@@ -308,7 +415,9 @@ class TaskUpdate(BaseModel):
     remarks: Optional[str] = None
     documents: Optional[str] = None
 
+
 class TaskOut(TaskBase, ORM):
     id: int
+    client_id: int
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
