@@ -18,6 +18,35 @@ class LoginRequest(BaseModel):
     password: str
 
 
+# Matter Types
+def normalize_matter_name(v: Any) -> str:
+    if v is None:
+        raise ValueError("Matter name cannot be empty")
+    v = str(v).strip()
+    v = re.sub(r'\s+', ' ', v)
+    if not v:
+        raise ValueError("Matter name cannot be empty or whitespace-only")
+    if len(v) > 200:
+        raise ValueError("Matter name must not exceed 200 characters")
+    return v
+
+
+class MatterTypeBase(BaseModel):
+    name: str
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: Any) -> str:
+        return normalize_matter_name(v)
+
+
+class MatterTypeCreate(MatterTypeBase): pass
+
+
+class MatterTypeOut(MatterTypeBase, ORM):
+    id: int
+
+
 # Category
 class CategoryBase(BaseModel):
     name: str
@@ -373,7 +402,7 @@ class MessageOut(MessageBase, ORM):
 class TaskBase(BaseModel):
     client_id: Optional[int] = None
     staff_id: Optional[int] = None
-    matter: str
+    matter: Optional[str] = None
     assigned_staff: Optional[str] = None
     date_assigned: Optional[date] = None
     due_date: Optional[date] = None
@@ -384,10 +413,27 @@ class TaskBase(BaseModel):
 
 
 class TaskCreate(TaskBase):
+    matter_type_id: Optional[int] = None
+    new_matter: Optional[str] = None
     new_client: Optional[ClientCreateInline] = None
 
+    @field_validator("matter_type_id")
+    @classmethod
+    def validate_matter_type_id(cls, v: Optional[int]) -> Optional[int]:
+        if v is not None and v <= 0:
+            raise ValueError("matter_type_id must be a positive integer")
+        return v
+
+    @field_validator("new_matter")
+    @classmethod
+    def validate_new_matter(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            return normalize_matter_name(v)
+        return v
+
     @model_validator(mode="after")
-    def validate_client_selection(self) -> "TaskCreate":
+    def validate_task_create(self) -> "TaskCreate":
+        # Client selection validation
         has_client_id = self.client_id is not None
         has_new_client = self.new_client is not None
 
@@ -400,6 +446,15 @@ class TaskCreate(TaskBase):
             if not isinstance(self.client_id, int) or self.client_id <= 0:
                 raise ValueError("client_id must be a positive integer")
 
+        # Matter selection validation: exactly one of (matter_type_id, new_matter, matter)
+        provided_matters = [f for f, val in [("matter_type_id", self.matter_type_id),
+                                             ("new_matter", self.new_matter),
+                                             ("matter", self.matter)] if val is not None]
+        if len(provided_matters) > 1:
+            raise ValueError(f"Provide exactly one of matter_type_id, new_matter, or matter, not multiple ({', '.join(provided_matters)})")
+        if len(provided_matters) == 0:
+            raise ValueError("Matter must be provided (via matter_type_id, new_matter, or matter)")
+
         return self
 
 
@@ -407,6 +462,8 @@ class TaskUpdate(BaseModel):
     client_id: Optional[int] = None
     staff_id: Optional[int] = None
     matter: Optional[str] = None
+    matter_type_id: Optional[int] = None
+    new_matter: Optional[str] = None
     assigned_staff: Optional[str] = None
     date_assigned: Optional[date] = None
     due_date: Optional[date] = None
@@ -415,9 +472,46 @@ class TaskUpdate(BaseModel):
     remarks: Optional[str] = None
     documents: Optional[str] = None
 
+    @field_validator("matter_type_id")
+    @classmethod
+    def validate_matter_type_id(cls, v: Optional[int]) -> Optional[int]:
+        if v is not None and v <= 0:
+            raise ValueError("matter_type_id must be a positive integer")
+        return v
+
+    @field_validator("new_matter")
+    @classmethod
+    def validate_new_matter(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            return normalize_matter_name(v)
+        return v
+
+    @model_validator(mode="after")
+    def validate_task_update(self) -> "TaskUpdate":
+        provided = [f for f, val in [("matter_type_id", self.matter_type_id),
+                                     ("new_matter", self.new_matter),
+                                     ("matter", self.matter)] if val is not None]
+        if len(provided) > 1:
+            raise ValueError("Provide at most one of matter_type_id, new_matter, or matter")
+        return self
+
 
 class TaskOut(TaskBase, ORM):
     id: int
     client_id: int
+    matter: str
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+
+
+# Dashboard summary
+class DashboardSummaryOut(BaseModel):
+    total_clients: int
+    active_clients: int
+    inactive_clients: int
+    messages_sent_today: int
+    messages_failed_today: int
+    due_within_7_days: int
+    assigned_tasks: int
+    total_matters: int
+    total_tasks: Optional[int] = None
