@@ -4,6 +4,7 @@ import { RouterLink, useRouter } from 'vue-router'
 import api from '../api'
 import { useTheme } from '../composables/useTheme'
 import { useCurrentStaff } from '../composables/useCurrentStaff'
+import SearchableSelect from '../components/SearchableSelect.vue'
 
 const router = useRouter()
 const { dark, init, toggle } = useTheme()
@@ -16,6 +17,16 @@ const {
   logout,
   loadStaff,
 } = useCurrentStaff()
+
+const staffOptions = computed(() => {
+  return staffList.value
+    .filter((s) => s.is_active)
+    .map((s) => ({
+      id: s.id,
+      name: s.name,
+      subtext: s.access_level,
+    }))
+})
 
 const online = ref(null) // null = checking
 
@@ -79,22 +90,17 @@ onMounted(async () => {
     <div class="side-foot">
       <!-- Active staff dropdown: available and visible ONLY to authenticated HIGH users -->
       <div v-if="isAuthenticatedHigh" class="side-staff-box">
-        <label for="active-staff-select" class="side-staff-label">Active Staff</label>
-        <select
-          id="active-staff-select"
-          class="side-staff-select"
-          :value="selectedStaffId"
-          @change="handleSwitchStaff($event.target.value)"
-        >
-          <option
-            v-for="s in staffList"
-            :key="s.id"
-            :value="s.id"
-            :disabled="!s.is_active"
-          >
-            {{ s.name }} ({{ s.access_level }})
-          </option>
-        </select>
+        <label id="active-staff-label" class="side-staff-label">Active Staff</label>
+        <SearchableSelect
+          :model-value="selectedStaffId"
+          :options="staffOptions"
+          :clearable="false"
+          placement="up"
+          placeholder="Switch staff..."
+          search-placeholder="Search staff..."
+          ariaLabel="Active staff"
+          @update:model-value="handleSwitchStaff"
+        />
       </div>
 
       <button class="side-btn" @click="toggle">
@@ -126,7 +132,7 @@ onMounted(async () => {
   color: #bfe0d6;
   font-weight: 600;
 }
-.side-staff-select {
+.side-staff-box :deep(.select-trigger) {
   font: inherit;
   font-size: 0.85rem;
   padding: 0.45rem 0.6rem;
@@ -136,11 +142,51 @@ onMounted(async () => {
   color: #fff;
   cursor: pointer;
   width: 100%;
-  outline: none;
 }
-.side-staff-select option {
+.side-staff-box :deep(.select-trigger:hover) {
+  background: rgba(255, 255, 255, 0.14);
+}
+.side-staff-box :deep(.placeholder-text) {
+  color: #bfe0d6;
+}
+.side-staff-box :deep(.arrow-indicator) {
+  color: #bfe0d6;
+}
+.side-staff-box :deep(.select-dropdown) {
   background: var(--side);
+  border: 1px solid var(--side-line);
+  box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.35);
+}
+.side-staff-box :deep(.search-box) {
+  background: var(--side);
+  border-bottom: 1px solid var(--side-line);
+}
+.side-staff-box :deep(.search-input) {
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid var(--side-line);
   color: #fff;
+}
+.side-staff-box :deep(.search-input::placeholder) {
+  color: #bfe0d6;
+}
+.side-staff-box :deep(.select-item) {
+  color: #e4f3ee;
+}
+.side-staff-box :deep(.select-item:hover),
+.side-staff-box :deep(.select-item.highlighted) {
+  background: rgba(255, 255, 255, 0.15);
+}
+.side-staff-box :deep(.select-item.selected) {
+  background: var(--side-active);
+  color: var(--side-active-ink);
+  font-weight: 600;
+}
+.side-staff-box :deep(.opt-subtext) {
+  color: #bfe0d6;
+}
+.side-staff-box :deep(.select-item.selected .opt-subtext) {
+  color: var(--side-active-ink);
+  opacity: 0.8;
 }
 .logout-btn {
   color: #ffcccc;
