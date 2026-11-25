@@ -21,6 +21,7 @@ const COLLECTION_ROUTES = new Set([
   '/messages',
   '/invoices',
   '/compliance-dates',
+  '/matter-types',
 ])
 
 api.interceptors.request.use((config) => {
