@@ -833,6 +833,7 @@ def remove_client_from_group(group_id: int, client_id: int, request: Request, db
     db.refresh(client)
     return client
 
+
 # ---------- Matter Types ----------
 matter_types = APIRouter(prefix="/matter-types", tags=["MatterType"])
 
@@ -869,3 +870,77 @@ def delete_matter_type(item_id: int, request: Request, db: Session = Depends(get
         raise HTTPException(404, "Matter type not found")
     db.delete(obj)
     db.commit()
+
+
+# ---------- Dashboard Summary ----------
+dashboard = APIRouter(prefix="/dashboard", tags=["Dashboard"])
+
+
+@dashboard.get("/summary", response_model=s.DashboardSummaryOut, response_model_exclude_none=True)
+def get_dashboard_summary(request: Request, date: Optional[str] = None, db: Session = Depends(get_db)):
+    operator = get_effective_staff(request, db)
+
+    # Date handling (business timezone: IST UTC+05:30)
+    target_date = datetime.datetime.now(IST).date()
+    if date:
+        try:
+            target_date = datetime.date.fromisoformat(date)
+        except ValueError:
+            pass
+
+    # Client statistics
+    if operator.access_level == m.AccessLevel.HIGH:
+        total_clients = db.query(func.count(m.Client.id)).scalar() or 0
+        active_clients = db.query(func.count(m.Client.id)).filter(m.Client.is_active == True).scalar() or 0
+        inactive_clients = db.query(func.count(m.Client.id)).filter(m.Client.is_active == False).scalar() or 0
+    else:
+        total_clients = db.query(func.count(m.Client.id)).filter(m.Client.assigned_staff_id == operator.id).scalar() or 0
+        active_clients = db.query(func.count(m.Client.id)).filter(m.Client.assigned_staff_id == operator.id, m.Client.is_active == True).scalar() or 0
+        inactive_clients = db.query(func.count(m.Client.id)).filter(m.Client.assigned_staff_id == operator.id, m.Client.is_active == False).scalar() or 0
+
+    # Message statistics
+    msg_q = db.query(m.MessageHistory)
+    if operator.access_level != m.AccessLevel.HIGH:
+        msg_q = msg_q.join(m.Client, m.MessageHistory.client_id == m.Client.id).filter(m.Client.assigned_staff_id == operator.id)
+    start_utc, end_utc = ist_day_utc_bounds(target_date)
+    msg_q = msg_q.filter(
+        m.MessageHistory.sent_timestamp >= start_utc,
+        m.MessageHistory.sent_timestamp < end_utc,
+    )
+
+    messages_sent_today = msg_q.filter(m.MessageHistory.status.in_(["SENT", "DELIVERED", "READ"])).with_entities(func.count(m.MessageHistory.id)).scalar() or 0
+    messages_failed_today = msg_q.filter(m.MessageHistory.status == "FAILED").with_entities(func.count(m.MessageHistory.id)).scalar() or 0
+
+    # Compliance statistics: inclusive today through today + 7 days
+    due_within_7_days = db.query(func.count(m.ComplianceDate.id)).filter(
+        m.ComplianceDate.due_date >= target_date,
+        m.ComplianceDate.due_date <= (target_date + datetime.timedelta(days=7))
+    ).scalar() or 0
+
+    # Task statistics
+    if operator.access_level == m.AccessLevel.HIGH:
+        assigned_tasks = db.query(func.count(m.ClientTask.id)).filter(m.ClientTask.staff_id == operator.id).scalar() or 0
+        total_tasks = db.query(func.count(m.ClientTask.id)).scalar() or 0
+    else:
+        assigned_tasks = db.query(func.count(m.ClientTask.id)).join(
+            m.Client, m.ClientTask.client_id == m.Client.id
+        ).filter(
+            m.Client.assigned_staff_id == operator.id,
+            m.ClientTask.staff_id == operator.id
+        ).scalar() or 0
+        total_tasks = None
+
+    # Total matters: catalogue count from matter_types
+    total_matters = db.query(func.count(m.MatterType.id)).scalar() or 0
+
+    return s.DashboardSummaryOut(
+        total_clients=total_clients,
+        active_clients=active_clients,
+        inactive_clients=inactive_clients,
+        messages_sent_today=messages_sent_today,
+        messages_failed_today=messages_failed_today,
+        due_within_7_days=due_within_7_days,
+        assigned_tasks=assigned_tasks,
+        total_matters=total_matters,
+        total_tasks=total_tasks,
+    )
