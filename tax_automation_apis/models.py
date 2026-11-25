@@ -1,7 +1,7 @@
 """SQLAlchemy ORM models mirroring schema.sql"""
 from sqlalchemy import (
     Column, Integer, String, Boolean, DECIMAL, Date, DateTime,
-    ForeignKey, Enum, func, Table, Text, Index
+    ForeignKey, Enum, func, Table, Text, Index, UniqueConstraint
 )
 from sqlalchemy.orm import relationship
 from database import Base
@@ -54,6 +54,16 @@ class Category(Base):
 
     clients = relationship("Client", secondary=client_categories, back_populates="categories")
     compliance_dates = relationship("ComplianceDate", back_populates="category", cascade="all, delete-orphan")
+
+
+class MatterType(Base):
+    __tablename__ = "matter_types"
+    __table_args__ = (
+        UniqueConstraint("name", name="uq_matter_types_name"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(200), unique=True, nullable=False)
 
 
 class Staff(Base):
