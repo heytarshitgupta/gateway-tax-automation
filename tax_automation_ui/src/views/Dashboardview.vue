@@ -4,7 +4,6 @@ import { useRouter } from 'vue-router'
 import api from '../api'
 import { todayStr, day, daysFromToday, fmtDate } from '../utils/dates'
 import PageHeader from '../layouts/PageHeader.vue'
-import MattersDrawer from '../components/MattersDrawer.vue'
 import { errMessage, useList } from '../composables/useApi'
 import { useCurrentStaff } from '../composables/useCurrentStaff'
 
@@ -42,9 +41,6 @@ const upcoming = computed(() =>
 )
 const dueText = (d) => ['Today', 'Tomorrow'][daysFromToday(d)] ?? `In ${daysFromToday(d)} days`
 
-// Matter catalogue drawer state
-const showMattersDrawer = ref(false)
-const mattersAddMode = ref(false)
 let summaryRequestSeq = 0
 
 async function loadDashboardSummary() {
@@ -119,8 +115,11 @@ function navigateToCreateTask() {
 }
 
 function openMatterCatalogue(addMode = false) {
-  mattersAddMode.value = addMode
-  showMattersDrawer.value = true
+  if (addMode && isHigh.value) {
+    router.push('/matters?action=add')
+  } else {
+    router.push('/matters')
+  }
 }
 
 // Reminder job
@@ -361,14 +360,6 @@ onMounted(() => {
         </li>
       </ul>
     </div>
-
-    <!-- Matter Catalogue Drawer -->
-    <MattersDrawer
-      v-if="showMattersDrawer"
-      :initial-add-mode="mattersAddMode"
-      @close="showMattersDrawer = false"
-      @matter-updated="loadDashboardSummary"
-    />
   </section>
 </template>
 
