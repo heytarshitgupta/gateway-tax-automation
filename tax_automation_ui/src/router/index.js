@@ -24,7 +24,7 @@ const routes = [
         meta: { requiresHigh: true },
       },
       { path: 'profile', component: () => import('../views/ProfileView.vue') },
-      { path: 'messages', ...page('Communication Log') },
+      { path: 'messages', component: () => import('../views/MessagesView.vue') },
     ],
   },
 ]
