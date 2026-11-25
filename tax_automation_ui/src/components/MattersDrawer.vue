@@ -8,6 +8,10 @@ const props = defineProps({
     type: Boolean,
     default: false,
   },
+  inline: {
+    type: Boolean,
+    default: false,
+  },
 })
 
 const emit = defineEmits(['close', 'matter-updated'])
@@ -113,6 +117,17 @@ async function confirmDelete() {
   }
 }
 
+watch(
+  () => props.initialAddMode,
+  (val) => {
+    if (val && isHigh.value) {
+      showAddForm.value = true
+      newMatterName.value = ''
+      addError.value = ''
+    }
+  }
+)
+
 watch(isHigh, (high) => {
   if (!high) {
     showAddForm.value = false
@@ -128,16 +143,21 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="overlay" @click.self="$emit('close')" @keydown.esc="$emit('close')">
-    <div class="drawer matter-drawer matters-drawer" role="dialog" aria-modal="true" aria-label="Matter Catalogue">
+  <div :class="inline ? 'matters-inline-host' : 'overlay'" @click.self="!inline && $emit('close')" @keydown.esc="!inline && $emit('close')">
+    <div
+      :class="inline ? 'matter-inline-panel matter-drawer matters-drawer' : 'drawer matter-drawer matters-drawer'"
+      :role="inline ? 'region' : 'dialog'"
+      :aria-modal="inline ? undefined : 'true'"
+      aria-label="Matter Catalogue"
+    >
       <div class="drawer-header">
         <div>
-          <h2>Matter Catalogue</h2>
+          <h2 v-if="!inline">Matter Catalogue</h2>
           <p class="sub">
             Available matters: <strong>{{ matters.length }}</strong>
           </p>
         </div>
-        <button type="button" class="btn mini" aria-label="Close drawer" @click="$emit('close')">
+        <button v-if="!inline" type="button" class="btn mini" aria-label="Close drawer" @click="$emit('close')">
           &times;
         </button>
       </div>
@@ -217,24 +237,24 @@ onMounted(() => {
         <div v-else-if="filteredMatters.length === 0" class="empty">
           No matters matching "{{ searchQuery }}".
         </div>
-        <ul v-else class="matters-list" role="list">
-          <li v-for="m in filteredMatters" :key="m.id" class="matter-item matter-row">
+        <div v-else class="matters-chips" role="list">
+          <div v-for="m in filteredMatters" :key="m.id" class="matter-chip matter-item matter-row" role="listitem">
             <span class="matter-name m-name">{{ m.name }}</span>
             <button
               v-if="isHigh"
               type="button"
-              class="mini danger delete-btn del-btn"
+              class="chip-del-btn delete-btn del-btn"
               title="Delete matter"
-              aria-label="Delete matter"
+              :aria-label="`Delete ${m.name}`"
               @click="promptDelete(m)"
             >
-              Delete
+              &times;
             </button>
-          </li>
-        </ul>
+          </div>
+        </div>
       </div>
 
-      <div class="actions">
+      <div v-if="!inline" class="actions">
         <button type="button" class="btn" @click="$emit('close')">Close</button>
       </div>
     </div>
@@ -242,10 +262,22 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.matter-drawer {
-  width: min(540px, 100%);
+.matters-inline-host {
+  width: 100%;
+}
+
+.matter-inline-panel {
   display: flex;
   flex-direction: column;
+}
+
+.matter-drawer {
+  display: flex;
+  flex-direction: column;
+}
+
+.drawer.matter-drawer {
+  width: min(540px, 100%);
 }
 
 .drawer-header {
@@ -317,35 +349,53 @@ onMounted(() => {
   border: 1px solid var(--line);
   border-radius: 6px;
   background: var(--surface);
-  min-height: 180px;
+  min-height: 120px;
 }
 
-.matters-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-
-.matter-item {
+.matters-chips {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 0.65rem 0.85rem;
-  border-bottom: 1px solid var(--line);
-  gap: 0.8rem;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  padding: 0.85rem;
+  align-items: flex-start;
+  align-content: flex-start;
 }
 
-.matter-item:last-child {
-  border-bottom: none;
+.matter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.75rem;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--sunken);
+  color: var(--ink);
+  font-size: 0.9rem;
+  line-height: 1.3;
+  max-width: 100%;
 }
 
 .matter-name {
-  flex: 1;
-  min-width: 0;
+  white-space: normal;
   word-break: break-word;
 }
 
-.delete-btn {
+.chip-del-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 1.05rem;
+  line-height: 1;
+  padding: 0 0.15rem;
+  border-radius: 50%;
   flex-shrink: 0;
+}
+
+.chip-del-btn:hover {
+  color: var(--danger);
 }
 </style>
