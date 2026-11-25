@@ -71,7 +71,8 @@ async def csrf_origin_protection(request: Request, call_next):
 app.include_router(auth_router)
 
 for r in (routers.categories, routers.staff, routers.clients, routers.compliance,
-          routers.invoices, routers.messages, routers.tasks, routers.groups):
+          routers.invoices, routers.messages, routers.tasks, routers.groups,
+          routers.matter_types):
     app.include_router(r)
 
 

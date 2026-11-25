@@ -740,3 +740,40 @@ def remove_client_from_group(group_id: int, client_id: int, request: Request, db
     db.commit()
     db.refresh(client)
     return client
+
+# ---------- Matter Types ----------
+matter_types = APIRouter(prefix="/matter-types", tags=["MatterType"])
+
+
+@matter_types.get("/", response_model=List[s.MatterTypeOut])
+def list_matter_types(request: Request, db: Session = Depends(get_db)):
+    get_authenticated_staff(request, db)
+    return db.query(m.MatterType).order_by(m.MatterType.name.asc()).all()
+
+
+@matter_types.post("/", response_model=s.MatterTypeOut, status_code=201)
+def create_matter_type(request: Request, data: s.MatterTypeCreate, db: Session = Depends(get_db)):
+    require_high_access(request, db)
+    norm_name = s.normalize_matter_name(data.name)
+    existing = db.query(m.MatterType).filter(func.lower(m.MatterType.name) == func.lower(norm_name)).first()
+    if existing:
+        raise HTTPException(409, "A matter type with this name already exists")
+    obj = m.MatterType(name=norm_name)
+    db.add(obj)
+    try:
+        db.commit()
+    except IntegrityError as e:
+        db.rollback()
+        raise _safe_integrity_error(e, "Matter type could not be created.")
+    db.refresh(obj)
+    return obj
+
+
+@matter_types.delete("/{item_id}", status_code=204)
+def delete_matter_type(item_id: int, request: Request, db: Session = Depends(get_db)):
+    require_high_access(request, db)
+    obj = db.get(m.MatterType, item_id)
+    if not obj:
+        raise HTTPException(404, "Matter type not found")
+    db.delete(obj)
+    db.commit()
