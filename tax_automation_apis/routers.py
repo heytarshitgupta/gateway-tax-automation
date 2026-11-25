@@ -1,5 +1,6 @@
 """CRUD routers. A small factory covers the simple tables; clients are custom (M2M categories)."""
-from typing import List
+from typing import List, Optional
+import datetime
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import func, and_, or_
 from sqlalchemy.exc import IntegrityError
@@ -9,6 +10,17 @@ import models as m
 import schemas as s
 from database import get_db
 from auth import get_authenticated_staff, get_effective_staff, require_high_access
+
+IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+
+
+def ist_day_utc_bounds(target_date: datetime.date) -> tuple[datetime.datetime, datetime.datetime]:
+    """Returns naive UTC [start, end) bounds for an IST (UTC+05:30) calendar day."""
+    start_ist = datetime.datetime.combine(target_date, datetime.time.min, tzinfo=IST)
+    end_ist = start_ist + datetime.timedelta(days=1)
+    start_utc = start_ist.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+    end_utc = end_ist.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+    return start_utc, end_utc
 
 
 def _safe_integrity_error(e: IntegrityError, default_msg: str = "Conflicting or invalid record details.") -> HTTPException:
@@ -34,6 +46,23 @@ def crud_router(prefix, tag, Model, Create, Update, Out, filters=()):
         for f in filters:  # e.g. ?client_id=1&status=PENDING
             if f in request.query_params:
                 q = q.filter(getattr(Model, f) == request.query_params[f])
+        if Model is m.MessageHistory:
+            if "date" in request.query_params:
+                try:
+                    d_val = datetime.date.fromisoformat(request.query_params["date"])
+                    start_utc, end_utc = ist_day_utc_bounds(d_val)
+                    q = q.filter(
+                        m.MessageHistory.sent_timestamp >= start_utc,
+                        m.MessageHistory.sent_timestamp < end_utc,
+                    )
+                except ValueError:
+                    pass
+            if "status_group" in request.query_params:
+                sg = request.query_params["status_group"].strip().lower()
+                if sg == "sent":
+                    q = q.filter(m.MessageHistory.status.in_(["SENT", "DELIVERED", "READ"]))
+                elif sg == "failed":
+                    q = q.filter(m.MessageHistory.status == "FAILED")
         return q.order_by(Model.id).offset(skip).limit(limit).all()
 
     @r.get("/{item_id}", response_model=Out)
