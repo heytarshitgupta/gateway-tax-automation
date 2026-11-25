@@ -41,7 +41,8 @@ const menu = computed(() => {
   }
   items.push({ to: '/profile', label: 'My Profile', icon: '👤' })
   items.push(
-    { to: '/tasks', label: 'Matters & Tasks', icon: '📋' },
+    { to: '/matters', label: 'Matters', icon: '📑' },
+    { to: '/tasks', label: 'Tasks', icon: '📋' },
     { to: '/messages', label: 'Communication Log', icon: '💬' },
   )
   return items
