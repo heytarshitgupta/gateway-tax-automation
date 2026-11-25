@@ -24,18 +24,35 @@ export function useNotify() {
   return { error, toast, flash, fail }
 }
 
-/** Loads a list on mount. getParams() is read on every load(), so filters stay current. */
+/** Fetches all authorized pages for a collection endpoint using skip/limit pagination. */
+export async function fetchAllPages(path, params = {}, pageSize = 100) {
+  const all = []
+  let skip = 0
+  while (true) {
+    const { data } = await api.get(path, { params: { ...params, skip, limit: pageSize } })
+    const batch = Array.isArray(data) ? data : []
+    all.push(...batch)
+    if (batch.length < pageSize) break
+    skip += pageSize
+  }
+  return all
+}
+
+/** Loads a complete authorized list on mount. Guarded against stale out-of-order responses. */
 export function useList(path, onError, getParams = () => ({})) {
   const items = ref([])
   const loading = ref(false)
+  let reqSeq = 0
   async function load() {
+    const seq = ++reqSeq
     loading.value = true
     try {
-      items.value = (await api.get(path, { params: getParams() })).data
+      const data = await fetchAllPages(path, getParams())
+      if (seq === reqSeq) items.value = data
     } catch (e) {
-      onError?.(e)
+      if (seq === reqSeq) onError?.(e)
     } finally {
-      loading.value = false
+      if (seq === reqSeq) loading.value = false
     }
   }
   onMounted(load)

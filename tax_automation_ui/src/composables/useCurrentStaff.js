@@ -1,5 +1,6 @@
 import { ref, computed } from 'vue'
 import api from '../api'
+import { fetchAllPages } from './useApi'
 
 const authenticatedUser = ref(null)
 const selectedStaff = ref(null)
@@ -97,8 +98,7 @@ async function loadStaff() {
   if (!authenticatedUser.value) return
   loading.value = true
   try {
-    const res = await api.get('/staff/')
-    staffList.value = res.data || []
+    staffList.value = await fetchAllPages('/staff/')
   } catch (err) {
     if (err?.response?.status !== 401 && err?.response?.status !== 403) {
       console.error('Failed to load staff list:', err)
