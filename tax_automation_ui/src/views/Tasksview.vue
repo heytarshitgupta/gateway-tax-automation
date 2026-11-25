@@ -1,5 +1,6 @@
 <script setup>
-import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import api from '../api'
 import { errMessage, useNotify, useList } from '../composables/useApi'
 import { useCurrentStaff } from '../composables/useCurrentStaff'
@@ -7,6 +8,10 @@ import { day, todayStr, fmtDate } from '../utils/dates'
 import PageHeader from '../layouts/PageHeader.vue'
 import AlertMessages from '../layouts/AlertMessages.vue'
 import FormDrawer from '../layouts/FormDrawer.vue'
+import SearchableSelect from '../components/SearchableSelect.vue'
+
+const route = useRoute()
+const router = useRouter()
 
 const STATUSES = [
   { key: 'PENDING', label: 'Pending' },
@@ -69,7 +74,7 @@ const isOverdue = (t) => !CLOSED.includes(t.status) && day(t.due_date) && day(t.
 
 const canEditTask = (t) => {
   if (isHigh.value) return true
-  if ((isMedium.value || isLow.value) && activeStaffId.value && t.staff_id === activeStaffId.value) {
+  if (isMedium.value && activeStaffId.value && t.staff_id === activeStaffId.value) {
     return true
   }
   return false
@@ -207,6 +212,86 @@ const editingId = ref(null)
 const saving = ref(false)
 const formError = ref('')
 
+// ---------- matter selection & custom creation ----------
+const matterTypes = ref([])
+const loadingMatterTypes = ref(false)
+const selectedMatterId = ref(null)
+const customMatterName = ref('')
+const initialEditingMatterId = ref(null)
+
+async function loadMatterTypes() {
+  loadingMatterTypes.value = true
+  try {
+    const { data } = await api.get('/matter-types/')
+    matterTypes.value = Array.isArray(data) ? data : []
+  } catch (err) {
+    // Graceful fallback
+  } finally {
+    loadingMatterTypes.value = false
+  }
+}
+
+const matterOptions = computed(() => {
+  const opts = matterTypes.value.map((m) => ({ id: m.id, name: m.name }))
+  if (isHigh.value) {
+    opts.push({ id: 'others', name: 'Others — Create new matter', isSpecial: true })
+  }
+  return opts
+})
+
+const isHistoricalMatter = computed(() => {
+  if (!editingId.value || !form.matter) return false
+  return !matterTypes.value.some((m) => m.name.toLowerCase() === form.matter.toLowerCase())
+})
+
+// Staff options for SearchableSelect
+const staffOptions = computed(() => {
+  return staff.value.map((s) => ({
+    id: s.id,
+    name: s.name,
+    alias: s.role,
+    subtext: s.access_level,
+  }))
+})
+
+// Watch router query for navigation from dashboard
+watch(
+  () => route.query,
+  async (newQuery) => {
+    if (newQuery.staff_id !== undefined) {
+      staffFilter.value = newQuery.staff_id || ''
+    }
+    if (newQuery.action === 'create') {
+      if (isHigh.value) {
+        await Promise.all([load(), loadClients(), loadMatterTypes()])
+        openForm()
+      }
+      router.replace({ query: { ...newQuery, action: undefined } }).catch(() => {})
+    }
+  },
+  { immediate: true }
+)
+
+// Close open mutation drawers if effective permissions drop during staff preview switching
+watch([activeStaffId, isHigh, isLow], ([newId, high, low]) => {
+  if (showForm.value) {
+    if (low || (!editingId.value && !high)) {
+      showForm.value = false
+      formError.value = ''
+      customMatterName.value = ''
+    } else if (editingId.value && !high) {
+      const current = tasks.value.find((x) => x.id === editingId.value)
+      if (!current || current.staff_id !== newId) {
+        showForm.value = false
+        formError.value = ''
+      } else if (selectedMatterId.value === 'others') {
+        selectedMatterId.value = initialEditingMatterId.value || null
+        customMatterName.value = ''
+      }
+    }
+  }
+})
+
 // ---------- client selection & inline creation ----------
 const clientSearchQuery = ref('')
 const selectedClient = ref(null)
@@ -312,9 +397,11 @@ function cancelInlineClientCreation() {
   newClientForm.client_type = 'REGULAR'
 }
 
-function openForm(task = null, status = 'PENDING') {
+async function openForm(task = null, status = 'PENDING') {
   if (!task && !isHigh.value) return
   if (task && !canEditTask(task)) return
+
+  await loadMatterTypes()
 
   editingId.value = task?.id ?? null
   Object.assign(form, task
@@ -339,22 +426,33 @@ function openForm(task = null, status = 'PENDING') {
     }
     isCreatingInlineClient.value = false
     showClientDropdown.value = false
+
+    // Matter resolution in edit mode
+    const matched = matterTypes.value.find((m) => m.name.toLowerCase() === (task.matter || '').toLowerCase())
+    if (matched) {
+      selectedMatterId.value = matched.id
+      initialEditingMatterId.value = matched.id
+    } else {
+      selectedMatterId.value = null
+      initialEditingMatterId.value = null
+    }
+    customMatterName.value = ''
   } else {
     selectedClient.value = null
     clientSearchQuery.value = ''
     showClientDropdown.value = false
     cancelInlineClientCreation()
+
+    // Matter in add mode
+    selectedMatterId.value = null
+    initialEditingMatterId.value = null
+    customMatterName.value = ''
   }
 
   showForm.value = true
 }
 
 async function save() {
-  if (!form.matter.trim()) {
-    formError.value = 'Please describe the matter.'
-    return
-  }
-
   if (isCreatingInlineClient.value) {
     if (!newClientForm.business_name.trim()) {
       formError.value = 'Client business name is required.'
@@ -389,17 +487,63 @@ async function save() {
 
   saving.value = true
   formError.value = ''
-  const staffId = form.staff_id === '' ? null : Number(form.staff_id)
+  const staffId = form.staff_id === '' || form.staff_id === 'unassigned' || form.staff_id === null ? null : Number(form.staff_id)
   const body = {
     staff_id: staffId,
-    matter: form.matter.trim(),
-    assigned_staff: staffId ? staffName(staffId) : nul(form.assigned_staff), // keeps the name text in step
+    assigned_staff: staffId ? staffName(staffId) : nul(form.assigned_staff),
     date_assigned: nul(form.date_assigned),
     due_date: nul(form.due_date),
     next_followup_date: nul(form.next_followup_date),
     status: form.status,
     remarks: nul(form.remarks.trim()),
     documents: nul(form.documents.trim()),
+  }
+
+  // Matter selection handling
+  if (!editingId.value) {
+    if (selectedMatterId.value === 'others') {
+      const trimmedCustom = customMatterName.value.trim().replace(/\s+/g, ' ')
+      if (!trimmedCustom) {
+        formError.value = 'Please enter a matter name for Others.'
+        saving.value = false
+        return
+      }
+      if (trimmedCustom.length > 200) {
+        formError.value = 'Matter name cannot exceed 200 characters.'
+        saving.value = false
+        return
+      }
+      body.new_matter = trimmedCustom
+    } else if (selectedMatterId.value) {
+      body.matter_type_id = Number(selectedMatterId.value)
+    } else {
+      formError.value = 'Please select a matter from the catalogue or choose Others.'
+      saving.value = false
+      return
+    }
+  } else {
+    if (selectedMatterId.value === 'others') {
+      if (!isHigh.value) {
+        formError.value = 'Only HIGH staff can create new matter types.'
+        saving.value = false
+        return
+      }
+      const trimmedCustom = customMatterName.value.trim().replace(/\s+/g, ' ')
+      if (!trimmedCustom) {
+        formError.value = 'Please enter a matter name for Others.'
+        saving.value = false
+        return
+      }
+      if (trimmedCustom.length > 200) {
+        formError.value = 'Matter name cannot exceed 200 characters.'
+        saving.value = false
+        return
+      }
+      body.new_matter = trimmedCustom
+    } else if (selectedMatterId.value && selectedMatterId.value !== initialEditingMatterId.value) {
+      body.matter_type_id = Number(selectedMatterId.value)
+    }
+    // If matter was not changed, omit all matter fields to strictly preserve existing historical matter
   }
 
   if (editingId.value) {
@@ -422,9 +566,14 @@ async function save() {
     else await api.post('/tasks/', body)
     flash(editingId.value ? 'Task updated' : 'Task added')
     showForm.value = false
-    await Promise.all([load(), loadClients()])
+    await Promise.all([load(), loadClients(), loadMatterTypes()])
   } catch (e) {
-    formError.value = errMessage(e)
+    if (e.response?.status === 409 && (body.new_matter || selectedMatterId.value === 'others')) {
+      formError.value = 'A matter with this name already exists in the catalogue. Please select it from the catalogue or enter a unique name.'
+      await loadMatterTypes()
+    } else {
+      formError.value = errMessage(e)
+    }
   } finally {
     saving.value = false
   }
@@ -503,10 +652,18 @@ async function remove(t) {
           </div>
         </div>
       </div>
-      <select v-model="staffFilter" aria-label="Staff filter">
-        <option value="">All staff</option>
-        <option v-for="s in staff" :key="s.id" :value="s.id">{{ s.name }}</option>
-      </select>
+      <div class="board-staff-filter" style="min-width: 170px;">
+        <SearchableSelect
+          v-model="staffFilter"
+          :options="staffOptions"
+          placeholder="All staff"
+          includeAll
+          allLabel="All staff"
+          includeUnassigned
+          unassignedLabel="Unassigned"
+          ariaLabel="Staff filter"
+        />
+      </div>
       <label class="inline"><input type="checkbox" v-model="hideClosed" /> Hide completed and cancelled</label>
     </div>
 
@@ -670,13 +827,53 @@ async function remove(t) {
           </div>
         </div>
       </div>
-      <label>Matter *<input v-model="form.matter" required placeholder="e.g. GST return for October" /></label>
+      <div class="form-field-group">
+        <div style="display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.88rem; font-weight: 600; color: var(--muted);">
+          <span>Matter *</span>
+          <div v-if="editingId && isHistoricalMatter && selectedMatterId !== 'others'" class="small muted-text" style="margin-bottom: 0.25rem;">
+            Current historical matter: <strong>{{ form.matter }}</strong>
+          </div>
+          <SearchableSelect
+            v-model="selectedMatterId"
+            class="task-matter-select"
+            :options="matterOptions"
+            :placeholder="editingId && isHistoricalMatter ? form.matter : 'Select a matter...'"
+            searchPlaceholder="Search available matters..."
+            :loading="loadingMatterTypes"
+            ariaLabel="Matter"
+            aria-label="Matter"
+          />
+        </div>
+        <div v-if="selectedMatterId === 'others'" class="custom-matter-box" style="margin-top: 0.5rem; background: var(--sunken); padding: 0.6rem; border-radius: 6px;">
+          <label style="display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.88rem; font-weight: 600; color: var(--muted);">
+            New matter name *
+            <input
+              v-model="customMatterName"
+              type="text"
+              class="custom-matter-input"
+              maxlength="200"
+              placeholder="e.g. Custom GST Advisory"
+              required
+              autocomplete="off"
+              aria-label="New matter name"
+            />
+          </label>
+          <button type="button" class="mini" style="margin-top: 0.35rem;" @click="selectedMatterId = initialEditingMatterId || null; customMatterName = ''">
+            Cancel new matter
+          </button>
+        </div>
+      </div>
       <div class="two">
         <label>Assigned to
-          <select v-model="form.staff_id" :disabled="!isHigh">
-            <option value="">Unassigned</option>
-            <option v-for="s in staff" :key="s.id" :value="s.id">{{ s.name }}</option>
-          </select>
+          <SearchableSelect
+            v-model="form.staff_id"
+            :options="staffOptions"
+            placeholder="Unassigned"
+            includeUnassigned
+            unassignedLabel="Unassigned"
+            :disabled="!isHigh"
+            ariaLabel="Assigned staff"
+          />
         </label>
         <label>Status
           <select v-model="form.status">
