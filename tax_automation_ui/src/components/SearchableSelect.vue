@@ -287,8 +287,11 @@ onUnmounted(() => {
           @mouseenter="highlightedIndex = idx"
         >
           <span class="opt-name">{{ opt.name }}</span>
-          <span v-if="opt.alias" class="opt-alias">({{ opt.alias }})</span>
-          <span v-if="opt.subtext" class="opt-subtext">{{ opt.subtext }}</span>
+          <span v-if="opt.alias || opt.subtext" class="opt-secondary">
+            <span v-if="opt.alias" class="opt-alias">{{ opt.alias }}</span>
+            <span v-if="opt.alias && opt.subtext"> · </span>
+            <span v-if="opt.subtext" class="opt-subtext">{{ opt.subtext }}</span>
+          </span>
         </div>
       </div>
     </div>
@@ -327,9 +330,9 @@ onUnmounted(() => {
 .selected-text {
   flex: 1;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  word-break: break-word;
+  line-height: 1.3;
 }
 
 .alias-sub {
@@ -419,9 +422,10 @@ onUnmounted(() => {
 
 .select-item {
   display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  padding: 0.5rem 0.75rem;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.1rem;
+  padding: 0.45rem 0.75rem;
   cursor: pointer;
   font-size: 0.9rem;
   color: var(--ink);
@@ -446,16 +450,18 @@ onUnmounted(() => {
 }
 
 .opt-name {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  width: 100%;
+  white-space: normal;
+  word-break: break-word;
+  line-height: 1.3;
+  font-weight: 500;
 }
 
+.opt-secondary,
 .opt-alias,
 .opt-subtext {
-  font-size: 0.82rem;
+  font-size: 0.78rem;
+  line-height: 1.25;
   color: var(--muted);
 }
 

@@ -244,13 +244,12 @@ const isHistoricalMatter = computed(() => {
   return !matterTypes.value.some((m) => m.name.toLowerCase() === form.matter.toLowerCase())
 })
 
-// Staff options for SearchableSelect
+// Staff options for SearchableSelect (designation only, no access-level tags)
 const staffOptions = computed(() => {
   return staff.value.map((s) => ({
     id: s.id,
     name: s.name,
     alias: s.role,
-    subtext: s.access_level,
   }))
 })
 

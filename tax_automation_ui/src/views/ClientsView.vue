@@ -61,8 +61,8 @@ const groupOptions = computed(() => {
   list.unshift({ id: 'ungrouped', name: 'Ungrouped', isSpecial: true })
   return list
 })
-const staffOptions = computed(() => staff.value.map((s) => ({ id: s.id, name: s.name, alias: s.role, subtext: s.access_level })))
-const activeStaffOptions = computed(() => staff.value.filter((s) => s.is_active).map((s) => ({ id: String(s.id), name: s.name, alias: s.role, subtext: s.access_level })))
+const staffOptions = computed(() => staff.value.map((s) => ({ id: s.id, name: s.name, alias: s.role })))
+const activeStaffOptions = computed(() => staff.value.filter((s) => s.is_active).map((s) => ({ id: String(s.id), name: s.name, alias: s.role })))
 
 const clients = ref([])
 const loading = ref(false)
