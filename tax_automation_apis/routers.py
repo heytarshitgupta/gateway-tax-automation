@@ -279,12 +279,40 @@ def create_task(request: Request, data: s.TaskCreate, db: Session = Depends(get_
         if not assigned_staff_name:
             assigned_staff_name = target_staff.name
 
+    # Resolve matter string and handle inline matter creation atomically
+    resolved_matter: str
+    if data.matter_type_id is not None:
+        mt = db.get(m.MatterType, data.matter_type_id)
+        if not mt:
+            raise HTTPException(400, "Invalid matter type ID")
+        resolved_matter = mt.name
+    elif data.new_matter is not None:
+        norm_name = s.normalize_matter_name(data.new_matter)
+        existing_mt = db.query(m.MatterType).filter(func.lower(m.MatterType.name) == func.lower(norm_name)).first()
+        if existing_mt:
+            raise HTTPException(409, "A matter type with this name already exists")
+        mt = m.MatterType(name=norm_name)
+        db.add(mt)
+        try:
+            db.flush()
+        except IntegrityError as e:
+            db.rollback()
+            raise _safe_integrity_error(e, "Matter type could not be created.")
+        resolved_matter = mt.name
+    elif data.matter is not None:
+        # Legacy Stage 9 free-text support (do not seed into matter_types)
+        resolved_matter = data.matter.strip()
+    else:
+        raise HTTPException(400, "Matter selection is required")
+
     # Workflow A: Existing Client
     if data.client_id is not None:
         client = db.get(m.Client, data.client_id)
         if not client:
+            db.rollback()
             raise HTTPException(404, "Client not found")
-        task_payload = data.model_dump(exclude={"new_client"})
+        task_payload = data.model_dump(exclude={"new_client", "matter_type_id", "new_matter", "matter"})
+        task_payload["matter"] = resolved_matter
         if assigned_staff_name:
             task_payload["assigned_staff"] = assigned_staff_name
         obj = m.ClientTask(**task_payload)
@@ -317,8 +345,9 @@ def create_task(request: Request, data: s.TaskCreate, db: Session = Depends(get_
         db.add(new_client_obj)
         try:
             db.flush()  # Populates new_client_obj.id within open transaction
-            task_payload = data.model_dump(exclude={"new_client", "client_id"})
+            task_payload = data.model_dump(exclude={"new_client", "client_id", "matter_type_id", "new_matter", "matter"})
             task_payload["client_id"] = new_client_obj.id
+            task_payload["matter"] = resolved_matter
             if assigned_staff_name:
                 task_payload["assigned_staff"] = assigned_staff_name
             obj = m.ClientTask(**task_payload)
@@ -343,6 +372,7 @@ def update_task(item_id: int, request: Request, data: s.TaskUpdate, db: Session 
     # Section 10: Explicitly reject LOW task updates with HTTP 403
     if operator.access_level == m.AccessLevel.LOW:
         raise HTTPException(403, "LOW access level accounts have read-only permissions")
+
     obj = db.get(m.ClientTask, item_id)
     if not obj:
         raise HTTPException(404, "Task not found")
@@ -353,7 +383,7 @@ def update_task(item_id: int, request: Request, data: s.TaskUpdate, db: Session 
         client = obj.client
         if not client or client.assigned_staff_id != operator.id:
             raise HTTPException(404, "Task not found")
-        # MEDIUM and LOW access rules:
+        # MEDIUM access rules:
         if obj.staff_id is None:
             raise HTTPException(403, "Unassigned matters can only be modified by HIGH staff")
         if obj.staff_id != operator.id:
@@ -364,14 +394,47 @@ def update_task(item_id: int, request: Request, data: s.TaskUpdate, db: Session 
             raise HTTPException(403, "Cannot reassign matters")
         if "client_id" in changes and changes["client_id"] != obj.client_id:
             raise HTTPException(403, "Cannot change a matter's client association")
+        # MEDIUM users cannot create new matter!
+        if "new_matter" in changes and changes["new_matter"] is not None:
+            raise HTTPException(403, "Only HIGH staff can create new matter types")
 
+    # Matter handling in PATCH:
+    if "matter_type_id" in changes and changes["matter_type_id"] is not None:
+        mt = db.get(m.MatterType, changes["matter_type_id"])
+        if not mt:
+            raise HTTPException(400, "Invalid matter type ID")
+        obj.matter = mt.name
+    elif "new_matter" in changes and changes["new_matter"] is not None:
+        if operator.access_level != m.AccessLevel.HIGH:
+            raise HTTPException(403, "Only HIGH staff can create new matter types")
+        norm_name = s.normalize_matter_name(changes["new_matter"])
+        existing_mt = db.query(m.MatterType).filter(func.lower(m.MatterType.name) == func.lower(norm_name)).first()
+        if existing_mt:
+            raise HTTPException(409, "A matter type with this name already exists")
+        mt = m.MatterType(name=norm_name)
+        db.add(mt)
+        try:
+            db.flush()
+        except IntegrityError as e:
+            db.rollback()
+            raise _safe_integrity_error(e, "Matter type could not be created.")
+        obj.matter = mt.name
+    elif "matter" in changes and changes["matter"] is not None:
+        obj.matter = changes["matter"].strip()
+
+    # Apply other fields (excluding matter selector keys)
     for k, v in changes.items():
-        setattr(obj, k, v)
+        if k not in ("matter_type_id", "new_matter", "matter"):
+            setattr(obj, k, v)
+
     try:
         db.commit()
     except IntegrityError as e:
         db.rollback()
         raise _safe_integrity_error(e, "Task could not be updated.")
+    except Exception:
+        db.rollback()
+        raise
     db.refresh(obj)
     return obj
 
