@@ -339,6 +339,10 @@ def create_task(request: Request, data: s.TaskCreate, db: Session = Depends(get_
 @tasks.patch("/{item_id}", response_model=s.TaskOut)
 def update_task(item_id: int, request: Request, data: s.TaskUpdate, db: Session = Depends(get_db)):
     operator = get_effective_staff(request, db)
+
+    # Section 10: Explicitly reject LOW task updates with HTTP 403
+    if operator.access_level == m.AccessLevel.LOW:
+        raise HTTPException(403, "LOW access level accounts have read-only permissions")
     obj = db.get(m.ClientTask, item_id)
     if not obj:
         raise HTTPException(404, "Task not found")
