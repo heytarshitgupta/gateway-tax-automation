@@ -1,11 +1,15 @@
 <script setup>
 import { ref, reactive, computed, watch, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import api from '../api'
 import { errMessage, useNotify, useList } from '../composables/useApi'
 import { useCurrentStaff } from '../composables/useCurrentStaff'
 import PageHeader from '../layouts/PageHeader.vue'
 import AlertMessages from '../layouts/AlertMessages.vue'
 import FormDrawer from '../layouts/FormDrawer.vue'
+import SearchableSelect from '../components/SearchableSelect.vue'
+
+const route = useRoute()
 
 const TEXT_FIELDS = [
   ['contact_name', 'Contact person'],
@@ -29,6 +33,36 @@ const clientFilter = ref('all') // all | my_assigned | active | inactive | my_as
 const clientTypeFilter = ref('all') // all | REGULAR | TEMP
 const categoryFilter = ref('')
 const groupFilter = ref('') // '' (All groups) | 'ungrouped' | String(group_id)
+
+// Close open mutation drawers if effective permissions drop during staff preview switching
+watch([isHigh, isMedium], ([high, med]) => {
+  if (!high && !med) {
+    showForm.value = false
+    showReassignDrawer.value = false
+  }
+})
+
+// Watch URL query parameter (e.g. from dashboard cards)
+watch(
+  () => route.query.filter,
+  (val) => {
+    if (val === 'active' || val === 'inactive') {
+      clientFilter.value = val
+    } else if (val === 'all') {
+      clientFilter.value = 'all'
+    }
+  },
+  { immediate: true }
+)
+
+const categoryOptions = computed(() => categories.value.map((c) => ({ id: String(c.id), name: c.name })))
+const groupOptions = computed(() => {
+  const list = groups.value.map((g) => ({ id: String(g.id), name: g.name }))
+  list.unshift({ id: 'ungrouped', name: 'Ungrouped', isSpecial: true })
+  return list
+})
+const staffOptions = computed(() => staff.value.map((s) => ({ id: s.id, name: s.name, alias: s.role, subtext: s.access_level })))
+const activeStaffOptions = computed(() => staff.value.filter((s) => s.is_active).map((s) => ({ id: String(s.id), name: s.name, alias: s.role, subtext: s.access_level })))
 
 const clients = ref([])
 const loading = ref(false)
@@ -876,15 +910,26 @@ async function removeMember(client) {
         <option value="REGULAR">Regular</option>
         <option value="TEMP">Temp</option>
       </select>
-      <select v-model="categoryFilter" aria-label="Category filter">
-        <option value="">All categories</option>
-        <option v-for="c in categories" :key="c.id" :value="c.id">{{ c.name }}</option>
-      </select>
-      <select v-model="groupFilter" aria-label="Family group filter">
-        <option value="">All groups</option>
-        <option value="ungrouped">Ungrouped</option>
-        <option v-for="g in groups" :key="g.id" :value="String(g.id)">{{ g.name }}</option>
-      </select>
+      <div style="min-width: 160px;">
+        <SearchableSelect
+          v-model="categoryFilter"
+          :options="categoryOptions"
+          placeholder="All categories"
+          includeAll
+          allLabel="All categories"
+          ariaLabel="Category filter"
+        />
+      </div>
+      <div style="min-width: 160px;">
+        <SearchableSelect
+          v-model="groupFilter"
+          :options="groupOptions"
+          placeholder="All groups"
+          includeAll
+          allLabel="All groups"
+          ariaLabel="Family group filter"
+        />
+      </div>
     </div>
 
     <AlertMessages :error="error" :toast="toast" />
@@ -963,10 +1008,14 @@ async function removeMember(client) {
       </div>
       <div class="two">
         <label v-if="isHigh">Assigned staff
-          <select v-model="form.assigned_staff_id">
-            <option value="">Unassigned</option>
-            <option v-for="s in staff" :key="s.id" :value="s.id">{{ s.name }}</option>
-          </select>
+          <SearchableSelect
+            v-model="form.assigned_staff_id"
+            :options="staffOptions"
+            placeholder="Unassigned"
+            includeUnassigned
+            unassignedLabel="Unassigned"
+            ariaLabel="Assigned staff"
+          />
         </label>
         <div v-else-if="isMedium" class="creation-assigned-notice">
           <label>Assigned staff</label>
@@ -1215,16 +1264,13 @@ async function removeMember(client) {
 
           <label>
             Assign To *
-            <select v-model="reassignTargetStaffId" :disabled="reassignSaving">
-              <option value="" disabled>Select staff member...</option>
-              <option
-                v-for="s in staff.filter((st) => st.is_active)"
-                :key="s.id"
-                :value="String(s.id)"
-              >
-                {{ s.name }} ({{ s.role }} - {{ s.access_level }})
-              </option>
-            </select>
+            <SearchableSelect
+              v-model="reassignTargetStaffId"
+              :options="activeStaffOptions"
+              placeholder="Select staff member..."
+              :disabled="reassignSaving"
+              ariaLabel="Assign To"
+            />
           </label>
 
           <div style="margin-top: 1.5rem; display: flex; gap: 0.5rem; justify-content: flex-end;">
