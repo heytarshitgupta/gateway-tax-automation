@@ -17,6 +17,7 @@ const routes = [
     children: [
       { path: 'dashboard', component: () => import('../views/Dashboardview.vue') },
       { path: 'clients', component: () => import('../views/ClientsView.vue') },
+      { path: 'matters', component: () => import('../views/MattersView.vue') },
       { path: 'tasks', component: () => import('../views/Tasksview.vue') },
       {
         path: 'staff',
